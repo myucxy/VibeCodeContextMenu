@@ -128,6 +128,20 @@ VibeCodeContextMenu/
 }
 ```
 
+## Super 模式说明
+
+右键菜单中带 **Super** 后缀的菜单项，是对应工具的「超级模式」，用于跳过安全确认、启用全自动执行。典型场景：
+
+| 工具 | 普通模式 | Super 模式 | 区别 |
+|------|----------|------------|------|
+| Claude | `claude` | `claude --dangerously-skip-permissions` | 跳过权限确认，自动执行所有操作 |
+| Aider | `aider` | `aider --yes-always` | 自动确认所有代码修改 |
+| OpenCode | `opencode` | `opencode` + `OPENCODE_PERMISSION=full` | 通过环境变量授予完整权限 |
+
+**适用场景**：在沙箱/虚拟机/测试环境中，信任 AI 对文件的全部操作，不想被反复弹窗打断。
+
+**注意**：Super 模式会绕过工具内置的安全检查，请仅在安全可控的环境中使用。
+
 ## 工作原理
 
 1. **安装时**：将启动器和配置释放到 `%LOCALAPPDATA%\VibeCode\`，在注册表中写入右键菜单项
