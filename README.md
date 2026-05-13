@@ -1,7 +1,7 @@
 # VibeCode Context Menu
 
 Windows 右键菜单管理工具，为文件夹快速启动各种 AI CLI 工具。
-
+![样例](a.png)
 ## 目录结构
 
 ```
