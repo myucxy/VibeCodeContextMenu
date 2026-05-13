@@ -1,0 +1,35 @@
+{
+  "menuName": "VibeCode",
+  "menuLabel": "VibeCode",
+  "globalEnv": {},
+  "tools": [
+    {
+      "name": "claude",
+      "command": "claude",
+      "icon": "claude.ico",
+      "super": {
+        "command": "claude --dangerously-skip-permissions",
+        "label": "claudeSuper"
+      }
+    },
+    {
+      "name": "codex",
+      "command": "codex",
+      "icon": "codex.ico",
+      "super": {
+        "command": "codex --dangerously-bypass-approvals-and-sandbox",
+        "label": "codexSuper"
+      }
+    },
+    {
+      "name": "openCode",
+      "command": "opencode",
+      "icon": "opencode.ico",
+      "super": {
+        "command": "opencode",
+        "env": { "OPENCODE_PERMISSION": "\"allow\"" },
+        "label": "openCodeSuper"
+      }
+    }
+  ]
+}
