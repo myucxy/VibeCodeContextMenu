@@ -52,6 +52,15 @@ foreach ($t in $config.tools) {
             Command = $t.super.command
             Env     = $envVars
         }
+        $resumeCommand = if ($t.super.resume -and $t.super.resume.command) {
+            $t.super.resume.command
+        } else {
+            "$($t.super.command) -R"
+        }
+        $toolMap["$($t.super.label)-R"] = @{
+            Command = $resumeCommand
+            Env     = $envVars
+        }
     }
 }
 
@@ -110,7 +119,10 @@ function New-DefaultConfig {
       "icon": "claude.ico",
       "super": {
         "command": "claude --dangerously-skip-permissions",
-        "label": "claudeSuper"
+        "label": "claudeSuper",
+        "resume": {
+          "command": "claude --dangerously-skip-permissions -r"
+        }
       }
     },
     {
@@ -119,7 +131,10 @@ function New-DefaultConfig {
       "icon": "codex.ico",
       "super": {
         "command": "codex --dangerously-bypass-approvals-and-sandbox",
-        "label": "codexSuper"
+        "label": "codexSuper",
+        "resume": {
+          "command": "codex --dangerously-bypass-approvals-and-sandbox resume"
+        }
       }
     },
     {
@@ -129,7 +144,10 @@ function New-DefaultConfig {
       "super": {
         "command": "opencode",
         "env": { "OPENCODE_PERMISSION": "\"allow\"" },
-        "label": "openCodeSuper"
+        "label": "openCodeSuper",
+        "resume": {
+          "command": "opencode -c"
+        }
       }
     }
   ]
@@ -192,6 +210,11 @@ function Install-Menu {
                 Key = "${prefix}_$($t.super.label)"; Label = $t.super.label
                 Tool = $t.super.label; Command = $t.command; Icon = $t.icon
             }
+            $i++; $prefix = '{0:D2}' -f $i
+            $allItems += @{
+                Key = "${prefix}_$($t.super.label)-R"; Label = "$($t.super.label)-R"
+                Tool = "$($t.super.label)-R"; Command = $t.command; Icon = $t.icon
+            }
         }
     }
 
@@ -242,8 +265,6 @@ function Install-Menu {
         foreach ($item in $items) {
             $itemPath = Join-Path $menuPath ("shell\" + $item.Key)
             $commandPath = Join-Path $itemPath 'command'
-
-            if (Test-Path -LiteralPath $commandPath) { continue }
 
             New-Item -Path $commandPath -Force | Out-Null
             New-ItemProperty -Path $itemPath -Name 'MUIVerb' -Value $item.Label -PropertyType String -Force | Out-Null
@@ -391,7 +412,7 @@ function Show-Status {
         $installed = Test-ToolInstalled $t.command
         $status = if ($installed) { "[已安装]" } else { "[未安装]" }
         $color = if ($installed) { "Green" } else { "DarkGray" }
-        $superInfo = if ($t.super) { " (Super: $($t.super.label))" } else { "" }
+        $superInfo = if ($t.super) { " (Super: $($t.super.label), Resume: $($t.super.label)-R)" } else { "" }
         Write-Host "  $status $($t.name) -> $($t.command)$superInfo" -ForegroundColor $color
     }
 }

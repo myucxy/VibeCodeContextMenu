@@ -9,7 +9,10 @@
       "icon": "claude.ico",
       "super": {
         "command": "claude --dangerously-skip-permissions",
-        "label": "claudeSuper"
+        "label": "claudeSuper",
+        "resume": {
+          "command": "claude --dangerously-skip-permissions -r"
+        }
       }
     },
     {
@@ -18,7 +21,10 @@
       "icon": "codex.ico",
       "super": {
         "command": "codex --dangerously-bypass-approvals-and-sandbox",
-        "label": "codexSuper"
+        "label": "codexSuper",
+        "resume": {
+          "command": "codex --dangerously-bypass-approvals-and-sandbox resume"
+        }
       }
     },
     {
@@ -28,7 +34,10 @@
       "super": {
         "command": "opencode",
         "env": { "OPENCODE_PERMISSION": "\"allow\"" },
-        "label": "openCodeSuper"
+        "label": "openCodeSuper",
+        "resume": {
+          "command": "opencode -c"
+        }
       }
     }
   ]
