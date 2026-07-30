@@ -1534,7 +1534,7 @@ function New-DefaultConfig {
     {
       "name": "grok",
       "command": "grok",
-      "icon": "vibecode.ico",
+      "icon": "grok.ico",
       "super": {
         "command": "grok --always-approve",
         "label": "grokSuper",

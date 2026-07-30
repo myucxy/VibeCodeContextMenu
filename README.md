@@ -14,9 +14,10 @@ VibeCodeContextMenu/
 ├── installers/           # Terminal、PowerShell、NVM、Node、AI CLI 离线包
 ├── ico/                  # 图标文件
 │   ├── vibecode.ico         # 主菜单图标
-│   ├── claude.ico
-│   ├── codex.ico
-│   └── opencode.ico
+│   ├── claude.ico            # Claude 官方图标
+│   ├── codex.ico             # Codex/OpenAI 官方图标
+│   ├── opencode.ico          # OpenCode 官方图标
+│   └── grok.ico              # Grok/xAI 官方图标
 ```
 
 ## 快速开始
@@ -240,3 +241,5 @@ Key 使用隐藏输入，并保存到当前用户环境变量；脚本状态页�
 - 主菜单图标固定使用 `ico/vibecode.ico`
 - 各工具图标通过 `tools.json` 中的 `icon` 字段指定
 - 图标放在 `ico/` 目录下，安装时会复制到部署目录
+
+内置工具图标均取自官方发布渠道：Claude 使用 `https://claude.ai/favicon.ico`，Codex 使用 Microsoft Store 官方 `OpenAI.Codex` 应用包中的 `icon-chatgpt.ico`，OpenCode 使用官方 `anomalyco/opencode` 仓库的生产版 `icon.ico`，Grok 使用 `https://x.ai/favicon.ico`。相关名称和标识的权利归各自所有者所有。
