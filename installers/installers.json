@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 3,
+  "windowsTerminal": {
+    "portable": {
+      "version": "1.24.11911.0",
+      "assets": {
+        "x64": {
+          "file": "Microsoft.WindowsTerminal_1.24.11911.0_x64.zip",
+          "sha256": "7691efeb71c8dd0b95536c84e366fa4cf809a42c534912f9cefa1056534383bd"
+        },
+        "arm64": {
+          "file": "Microsoft.WindowsTerminal_1.24.11911.0_arm64.zip",
+          "sha256": "d794a881d4b4e151d79366fac85d1cbe7e21e90fa69f4157796377c13f1ea844"
+        }
+      }
+    }
+  },
+  "powerShell": {
+    "portable": {
+      "version": "7.6.4",
+      "assets": {
+        "x64": {
+          "file": "PowerShell-7.6.4-win-x64.zip",
+          "sha256": "80832551c52809301e6071c8bac977beb5a2f1ec953eb4db9f94deb953333793"
+        },
+        "arm64": {
+          "file": "PowerShell-7.6.4-win-arm64.zip",
+          "sha256": "774e541334ae2b2b9f14b96a0808e8905f19a103aefc790ec5d5be2a63ae9314"
+        }
+      }
+    }
+  },
+  "developerTools": {
+    "nvmWindows": {
+      "portable": {
+        "version": "1.2.2",
+        "file": "nvm-noinstall-1.2.2.zip",
+        "sha256": "74232ea51c060ecd44ecf2cebee314ed9e3f6da56e1f9484d8d46c4e8bb6ae0e"
+      }
+    },
+    "node": {
+      "portable": {
+        "version": "24.18.0",
+        "assets": {
+          "x64": {
+            "file": "node-v24.18.0-win-x64.zip",
+            "sha256": "0ae68406b42d7725661da979b1403ec9926da205c6770827f33aac9d8f26e821"
+          },
+          "arm64": {
+            "file": "node-v24.18.0-win-arm64.zip",
+            "sha256": "f274669adb93b1fd0fbf8f21fd078609e9dcc84333d4f2718d2dde3f9a161a01"
+          }
+        }
+      }
+    },
+    "aiCli": {
+      "bundleVersion": "2026.07.27",
+      "packages": {
+        "codex": "0.145.0",
+        "claude": "2.1.220",
+        "openCode": "1.18.6"
+      },
+      "assets": {
+        "x64": {
+          "file": "VibeCode-AiCli-2026.07.27-win-x64.zip",
+          "sha256": "45a5740175d2e4273648617ee8f9f4a6fb97dc725e4e0e72b85e0a9e45174e9d"
+        },
+        "arm64": {
+          "file": "VibeCode-AiCli-2026.07.27-win-arm64.zip",
+          "sha256": "c19c78b90132ea9795e96069b9ec3a338f3abca040db3ffd166deb2ea3ede757"
+        }
+      }
+    }
+  }
+}

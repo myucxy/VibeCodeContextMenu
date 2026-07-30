@@ -39,6 +39,18 @@
           "command": "opencode -c"
         }
       }
+    },
+    {
+      "name": "grok",
+      "command": "grok",
+      "icon": "vibecode.ico",
+      "super": {
+        "command": "grok --always-approve",
+        "label": "grokSuper",
+        "resume": {
+          "command": "grok --always-approve -r"
+        }
+      }
     }
   ]
 }

@@ -1,1 +1,3 @@
 dev/
+dist/
+.claude/settings.local.json
