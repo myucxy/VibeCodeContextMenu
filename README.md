@@ -285,3 +285,49 @@ Key 使用隐藏输入，并保存到当前用户环境变量；脚本状态页�
 - 图标放在 `ico/` 目录下，安装时会复制到部署目录
 
 内置工具图标均取自官方发布渠道：Claude 使用 `https://claude.ai/favicon.ico`，Codex 使用 Microsoft Store 官方 `OpenAI.Codex` 应用包中的 `icon-chatgpt.ico`，OpenCode 使用官方 `anomalyco/opencode` 仓库的生产版 `icon.ico`，Grok 使用 `https://x.ai/favicon.ico`，Antigravity 使用官方 Antigravity 桌面应用 `Antigravity.exe` 内嵌的应用图标。相关名称和标识的权利归各自所有者所有。
+
+## macOS 支持（原生 Finder 右键级联菜单）
+
+项目在 `macos/` 目录下提供原生 Swift 实现的 macOS 版本（`VibeCode.app` + `Finder Sync Extension`），完全复用根目录的 `tools.json` 与 `ico/` 图标，在 Finder 右键文件夹及文件夹空白处均可使用级联菜单。
+
+### 环境要求
+
+- macOS 13.0 及以上（Apple Silicon / Intel）
+- Xcode 或 Xcode Command Line Tools（用于本地编译 `swiftc`）
+
+### 快速安装与使用
+
+```bash
+# 本地编译、签名并安装到 /Applications/VibeCode.app
+./macos/build.sh
+```
+
+安装完成后即自动驻留屏幕右上角菜单栏（不占 Dock），点击菜单栏 **VibeCode** 图标或右键菜单中的 **管理 VibeCode...** 即可打开纯图形化设置窗口（工具勾选与拖拽排序、代理配置与测速、默认终端、关于等），无需命令行管理脚本。
+
+首次安装后，如 Finder 右键尚未显示 **VibeCode**，请前往「系统设置 → 通用 → 登录项与扩展 → Finder」，确认已勾选 **VibeCode 右键菜单**。
+
+### 制作 macOS 分发安装包（DMG / PKG）
+
+版本号统一维护在 `macos/VERSION`，可使用 `macos/pack.sh` 一键编译 **Universal Binary（Apple Silicon + Intel）** 安装包到 `dist/` 目录（自动剥离本机代理配置并生成 `.sha256` 校验文件）：
+
+```bash
+# 默认生成 dist/VibeCode-v<版本号>-macOS-universal.dmg
+./macos/pack.sh
+
+# 指定版本号并同时生成 .dmg 与 .pkg 安装向导包
+./macos/pack.sh --version 1.0.0 --pkg
+
+# 若有付费 Apple Developer ID 证书，可指定签名与公证
+./macos/pack.sh --sign "Developer ID Application: Your Name (TEAMID)" --notarize-profile "AC_PROFILE"
+```
+
+> 使用免费/ad-hoc 签名打包分发时，其他 Mac 下载解压后如遇系统安全提示，在终端运行一次 `xattr -cr /Applications/VibeCode.app` 即可正常打开。
+
+### macOS 版特性
+
+- **原生级联右键菜单**：支持右键文件夹、右键目录空白处及侧边栏，自动覆盖外接磁盘/独立卷（`/Volumes/*`），并支持右键显示总开关。
+- **全量 19+ 款主流 AI CLI + 自定义扩展**：设置窗口直接展示全部 19 款国际与国内主流 AI CLI（未安装的自动置灰禁止勾选，安装后点击「刷新检测」即可启用），并支持添加、编辑、删除任意自定义 CLI 及导入自定义图标（无图标时自动生成品牌色圆角徽标）。
+- **多工具智能折叠与模式筛选**：支持「自动（>5 项折叠） / 平铺展开 / 按工具折叠二级子菜单」三种排版模式，并可独立开关「普通 / Super / 恢复 (-R)」菜单项，支持拖拽排序并实时生效。
+- **内置代理配置与连通性测试**：自动通过 `scutil --proxy` 检测 Clash Verge 等系统代理一键填入，支持手动配置代理与 `NO_PROXY`、一键测试连通性以及单工具强制直连（`useProxy: false`）。
+- **多终端自动检测**：通过 Bundle ID 与系统路径自动检测本机已安装的终端（支持 `Terminal`、`iTerm2`、`Ghostty`、`Warp`、`WezTerm`、`kitty`、`Alacritty`、`Rio`、`Tabby`、`Hyper`），下拉列表仅展示本机可用终端。
+- **菜单栏快捷入口**：`VibeCode.app` 提供轻量菜单栏图标（不占 Dock），可快速在当前 Finder 目录启动工具、一键开关访达右键、打开设置窗口、切换终端或开关代理。
