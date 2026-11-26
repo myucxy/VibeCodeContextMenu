@@ -285,6 +285,27 @@ try {
         Copy-Item -LiteralPath $spec.SourcePath -Destination $destination -Force
     }
 
+    $stagedToolsPath = Join-Path $packageRoot 'tools.json'
+    $stagedTools = Get-Content -LiteralPath $stagedToolsPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $strippedLocalProxy = $false
+    if ($null -ne $stagedTools.PSObject.Properties['proxy']) {
+        $stagedTools.PSObject.Properties.Remove('proxy')
+        $strippedLocalProxy = $true
+    }
+    foreach ($tool in @($stagedTools.tools)) {
+        if ($null -ne $tool.PSObject.Properties['useProxy']) {
+            $tool.PSObject.Properties.Remove('useProxy')
+            $strippedLocalProxy = $true
+        }
+    }
+    if ($strippedLocalProxy) {
+        $cleanJson = ($stagedTools | ConvertTo-Json -Depth 10) + "`r`n"
+        [IO.File]::WriteAllText($stagedToolsPath, $cleanJson, (New-Object System.Text.UTF8Encoding($false)))
+        $expectedFileHashes['tools.json'] =
+            (Get-FileHash -LiteralPath $stagedToolsPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        Write-Host '  [--] 已从打包副本的 tools.json 中移除本机 proxy 配置。' -ForegroundColor Yellow
+    }
+
     Write-Host '正在复核临时打包目录...' -ForegroundColor Cyan
     foreach ($spec in $fileSpecs) {
         $stagedPath = Join-Path $packageRoot $spec.RelativePath

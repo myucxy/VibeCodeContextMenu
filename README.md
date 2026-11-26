@@ -17,7 +17,8 @@ VibeCodeContextMenu/
 │   ├── claude.ico            # Claude 官方图标
 │   ├── codex.ico             # Codex/OpenAI 官方图标
 │   ├── opencode.ico          # OpenCode 官方图标
-│   └── grok.ico              # Grok/xAI 官方图标
+│   ├── grok.ico              # Grok/xAI 官方图标
+│   └── agy.ico               # Antigravity (agy) 官方图标
 ```
 
 ## 快速开始
@@ -28,13 +29,27 @@ VibeCodeContextMenu/
 .\VibeCode.ps1
 ```
 
-选择 `1) 安装右键菜单`，再输入一个或多个工具编号。安装列表默认不选择任何工具，直接回车会取消；多个编号可用逗号或空格分隔。
+选择 `1) 安装右键菜单`，再输入一个或多个工具编号。安装列表默认不选择任何工具，直接回车会取消；多个编号可用逗号或空格分隔。**编号的输入顺序就是右键菜单中的显示顺序**，例如输入 `5 1 2` 会把第 5 个工具排在最前面。
 
 本项目仅支持 64 位 Windows（x64/ARM64）。在 32 位 Windows 上启动时会直接提示不支持并退出。
 
 安装脚本会自动检查 Windows Terminal 和 PowerShell 7。两项基础运行环境缺失时仍只使用项目携带的对应架构离线包，不访问 Microsoft Store 或下载安装程序。
-所选的 Codex、Claude、OpenCode 缺失时会先征求确认：网络可用则通过 npm 安装最新版，网络不可用或在线安装失败则使用项目内离线 CLI 束。Grok CLI 由其官方安装程序独立管理，本项目检测到 `grok` 命令后即可为它安装菜单。
+所选的 Codex、Claude、OpenCode 缺失时会先征求确认：网络可用则通过 npm 安装最新版，网络不可用或在线安装失败则使用项目内离线 CLI 束。Grok CLI 和 Antigravity CLI（`agy`）由各自的官方安装程序独立管理，本项目检测到 `grok` / `agy` 命令后即可为它安装菜单。
 最终写入可执行文件的稳定完整路径，可兼容 Windows Terminal 配置为管理员启动的场景。
+
+## 启动时出现 totalWidth / ShowUpdateNotification 错误
+
+PowerShell 7.6.6/7.6.7 在显示中文等语言的更新通知时，可能因文本补齐宽度为负数而在启动阶段崩溃。错误发生在启动器脚本执行之前，修改 `tools.json` 的 `globalEnv` 无法解决。
+
+本项目的右键启动命令已添加 `-NoLogo`，跳过启动横幅及更新通知。已有菜单需要重新运行 `VibeCode.bat`，选择 `1) 安装右键菜单` 并勾选要保留的工具，才能更新注册表中的启动命令。
+
+如果从开始菜单直接打开 PowerShell 7 也会崩溃，可按 `Win+R` 输入 `cmd`，执行：
+
+```bat
+setx POWERSHELL_UPDATECHECK Off
+```
+
+关闭所有 Windows Terminal 窗口后重新打开，使新进程读取环境变量；仍未生效时注销并重新登录。此设置关闭的是更新通知，不会阻止手动升级 PowerShell。PowerShell 7.6.8 已移除更新通知功能，也可升级到该版本或后续稳定版解决。
 
 ## 制作可分发离线包
 
@@ -65,8 +80,30 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\Pack-VibeCode.ps1
   4) 安装/修复运行环境
   5) 安装/更新 Codex、Claude、OpenCode CLI
   6) 配置 Codex/Claude API
+  7) 调整右键菜单顺序   # 重新排列已注册工具在右键菜单中的顺序
+  8) 配置 CLI 代理     # 为右键菜单启动的 CLI 注入 HTTP(S)_PROXY / NO_PROXY
   0/Q) 退出
 ```
+
+## 调整右键菜单顺序
+
+Explorer 按注册表键名排序级联子菜单，本项目用 `01_`、`02_` 等数字前缀控制显示顺序。有两种方式调整顺序：
+
+1. **安装时**：按期望顺序输入工具编号（如 `5 1 2`）。安装页会显示当前已注册的顺序及保持不变所需的输入。
+2. **安装后**：选择主菜单 `7) 调整右键菜单顺序`，按新顺序输入编号（如 `3 1 2`）；未输入的工具保持原相对顺序排在后面。该操作只重命名注册表键，不重新部署文件，立即生效。
+
+同一工具的普通、Super、Super 恢复三个菜单项始终相邻，并保持这一内部顺序。`3) 查看工具状态` 会显示当前菜单顺序。
+
+## 配置 CLI 代理
+
+部分 CLI（例如 `agy`）不读取 Windows 系统代理，只读取 `HTTP_PROXY` / `HTTPS_PROXY` 环境变量。选择主菜单 `8) 配置 CLI 代理` 可以：
+
+1. **自动读取 Windows 系统代理**（如 Clash 等代理软件写入的 `127.0.0.1:7897`）并一键启用；
+2. **手动输入代理地址**（支持 `http://`、`https://`、`socks5://`）和 `NO_PROXY`（默认 `localhost,127.0.0.1,::1`）；
+3. **按工具设置直连**：默认全部工具走代理，也可单独将某些工具设为强制直连（在 `tools.json` 中记录 `"useProxy": false`）；
+4. **测试代理连通性**或**停用代理**。
+
+代理配置保存在 `tools.json` 的 `proxy` 字段中，并自动同步到已部署目录，**只对 VibeCode 右键菜单启动的工具及管理脚本自身的联网下载生效**，不会修改系统级或用户级环境变量，也不需要重启资源管理器。运行 `Pack-VibeCode.ps1` 打包离线分发包时，会自动从打包副本的 `tools.json` 中剔除本机 `proxy` 和 `useProxy` 配置。
 
 ## 运行环境离线部署
 
@@ -103,6 +140,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\Pack-VibeCode.ps1
 
 Grok CLI 不在 npm/离线 CLI 束中；请先使用 Grok 官方方式安装，使 `grok` 命令进入 PATH。菜单安装页会显示其检测状态。
 
+Antigravity CLI（`agy`）同样不在离线束中；请先按 [Antigravity 官方文档](https://antigravity.google/docs/cli/reference) 安装，并在终端运行一次 `agy` 完成登录，使 `agy` 命令进入 PATH。
+
 整个项目仅支持 64 位 Windows（x64/ARM64），不包含任何 32 位离线包。代理可通过 `HTTP_PROXY`、`HTTPS_PROXY` 用户或进程环境变量提供。
 
 ## Codex/Claude API 配置
@@ -136,6 +175,7 @@ Key 使用隐藏输入，并保存到当前用户环境变量；脚本状态页�
 | `menuName` | 注册表中的键名；必须是 1-80 字符的安全单目录名称，不能包含路径分隔符、非法字符、Windows 保留设备名或受保护的系统目录名 |
 | `menuLabel` | 右键菜单显示的名称 |
 | `globalEnv` | 所有工具共享的环境变量 |
+| `proxy` | 可选，CLI 代理配置（`enabled`、`url`、`noProxy`），通过主菜单 `8)` 管理 |
 
 ### 工具配置
 
@@ -162,6 +202,7 @@ Key 使用隐藏输入，并保存到当前用户环境变量；脚本状态页�
 | `name` | 是 | 菜单项名称 |
 | `command` | 是 | 用于检测是否已安装（`Get-Command`） |
 | `icon` | 是 | 图标文件名（放在 `ico/` 目录下） |
+| `useProxy` | 否 | 设为 `false` 时强制该工具直连并清除代理环境变量；省略或 `true` 时使用 `proxy` 配置 |
 | `super` | 否 | Super 模式配置，不填则不生成 Super 菜单 |
 | `super.command` | 是 | Super 模式执行的命令 |
 | `super.label` | 是 | Super 菜单项名称 |
@@ -216,6 +257,7 @@ Key 使用隐藏输入，并保存到当前用户环境变量；脚本状态页�
 |------|----------|------------|------|
 | Claude | `claude` | `claude --dangerously-skip-permissions` | 跳过权限确认，自动执行所有操作 |
 | Grok | `grok` | `grok --always-approve` | 自动批准所有工具执行；恢复菜单额外使用 `-r` |
+| Antigravity | `agy` | `agy --dangerously-skip-permissions` | 自动批准所有工具权限请求；恢复菜单使用 `-c` 继续最近一次会话 |
 | Aider | `aider` | `aider --yes-always` | 自动确认所有代码修改 |
 | OpenCode | `opencode` | `opencode` + `OPENCODE_PERMISSION=full` | 通过环境变量授予完整权限 |
 
@@ -242,4 +284,4 @@ Key 使用隐藏输入，并保存到当前用户环境变量；脚本状态页�
 - 各工具图标通过 `tools.json` 中的 `icon` 字段指定
 - 图标放在 `ico/` 目录下，安装时会复制到部署目录
 
-内置工具图标均取自官方发布渠道：Claude 使用 `https://claude.ai/favicon.ico`，Codex 使用 Microsoft Store 官方 `OpenAI.Codex` 应用包中的 `icon-chatgpt.ico`，OpenCode 使用官方 `anomalyco/opencode` 仓库的生产版 `icon.ico`，Grok 使用 `https://x.ai/favicon.ico`。相关名称和标识的权利归各自所有者所有。
+内置工具图标均取自官方发布渠道：Claude 使用 `https://claude.ai/favicon.ico`，Codex 使用 Microsoft Store 官方 `OpenAI.Codex` 应用包中的 `icon-chatgpt.ico`，OpenCode 使用官方 `anomalyco/opencode` 仓库的生产版 `icon.ico`，Grok 使用 `https://x.ai/favicon.ico`，Antigravity 使用官方 Antigravity 桌面应用 `Antigravity.exe` 内嵌的应用图标。相关名称和标识的权利归各自所有者所有。

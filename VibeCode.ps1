@@ -35,7 +35,7 @@ if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) {
     return
 }
 
-$config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+$config = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
 
 if (-not (Test-Path -LiteralPath $Path -PathType Container)) {
     Write-Host "Folder does not exist: $Path" -ForegroundColor Red
@@ -91,9 +91,12 @@ $env:Path = @(
 $toolMap = @{}
 
 foreach ($t in $config.tools) {
+    # useProxy 为 false 时该工具强制直连；省略或 true 时使用 tools.json 中的代理。
+    $useProxy = $t.useProxy -ne $false
     $toolMap[$t.name] = @{
-        Command = $t.command
-        Env     = $null
+        Command  = $t.command
+        Env      = $null
+        UseProxy = $useProxy
     }
 
     if ($t.super) {
@@ -105,8 +108,9 @@ foreach ($t in $config.tools) {
             }
         }
         $toolMap[$t.super.label] = @{
-            Command = $t.super.command
-            Env     = $envVars
+            Command  = $t.super.command
+            Env      = $envVars
+            UseProxy = $useProxy
         }
         $resumeCommand = if ($t.super.resume -and $t.super.resume.command) {
             $t.super.resume.command
@@ -114,8 +118,9 @@ foreach ($t in $config.tools) {
             "$($t.super.command) -R"
         }
         $toolMap["$($t.super.label)-R"] = @{
-            Command = $resumeCommand
-            Env     = $envVars
+            Command  = $resumeCommand
+            Env      = $envVars
+            UseProxy = $useProxy
         }
     }
 }
@@ -126,6 +131,23 @@ if (-not $toolMap.ContainsKey($Tool)) {
 }
 
 $entry = $toolMap[$Tool]
+
+# CLI 程序（如 agy）不读取 Windows 系统代理，只认 HTTP(S)_PROXY 环境变量。
+$proxyVariables = @('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY')
+if (-not $entry.UseProxy) {
+    foreach ($name in $proxyVariables) {
+        Remove-Item -Path "env:$name" -ErrorAction SilentlyContinue
+    }
+} elseif ($config.proxy -and $config.proxy.enabled -and
+    -not [string]::IsNullOrWhiteSpace([string]$config.proxy.url)) {
+    $env:HTTP_PROXY = [string]$config.proxy.url
+    $env:HTTPS_PROXY = [string]$config.proxy.url
+    $env:NO_PROXY = if ($config.proxy.noProxy) {
+        [string]$config.proxy.noProxy
+    } else {
+        'localhost,127.0.0.1,::1'
+    }
+}
 
 if ($config.globalEnv) {
     $config.globalEnv.PSObject.Properties | ForEach-Object {
@@ -1481,7 +1503,7 @@ function Get-Config {
         New-DefaultConfig -Path $configPath
     }
 
-    $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+    $config = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
     $config.menuName = Get-SafeMenuName -Name $config.menuName
     return $config
 }
@@ -1542,6 +1564,18 @@ function New-DefaultConfig {
           "command": "grok --always-approve -r"
         }
       }
+    },
+    {
+      "name": "agy",
+      "command": "agy",
+      "icon": "agy.ico",
+      "super": {
+        "command": "agy --dangerously-skip-permissions",
+        "label": "agySuper",
+        "resume": {
+          "command": "agy --dangerously-skip-permissions -c"
+        }
+      }
     }
   ]
 }
@@ -1551,31 +1585,130 @@ function New-DefaultConfig {
 }
 
 function Get-MenuItems {
-    param([Parameter(Mandatory = $true)]$Config)
+    <#
+        生成菜单项列表。Explorer 按注册表键名排序级联子菜单，
+        因此键名使用连续数字前缀；传入 -Tools 时按其顺序编号。
+    #>
+    param(
+        [Parameter(Mandatory = $true)]$Config,
+        [object[]]$Tools
+    )
 
+    $orderedTools = if ($PSBoundParameters.ContainsKey('Tools')) { @($Tools) } else { @($Config.tools) }
+    $definitions = @()
+    foreach ($t in $orderedTools) {
+        $definitions += @{ Label = $t.name; Tool = $t.name; Source = $t }
+        if ($t.super) {
+            $definitions += @{ Label = $t.super.label; Tool = $t.super.label; Source = $t }
+            $definitions += @{ Label = "$($t.super.label)-R"; Tool = "$($t.super.label)-R"; Source = $t }
+        }
+    }
+
+    $width = [math]::Max(2, ([string]$definitions.Count).Length)
     $allItems = @()
     $i = 0
-    foreach ($t in $Config.tools) {
-        $i++; $prefix = '{0:D2}' -f $i
+    foreach ($definition in $definitions) {
+        $i++
+        $t = $definition.Source
         $allItems += @{
-            Key = "${prefix}_$($t.name)"; Label = $t.name
-            Tool = $t.name; Command = $t.command; Icon = $t.icon; Group = $t.name
-        }
-        if ($t.super) {
-            $i++; $prefix = '{0:D2}' -f $i
-            $allItems += @{
-                Key = "${prefix}_$($t.super.label)"; Label = $t.super.label
-                Tool = $t.super.label; Command = $t.command; Icon = $t.icon; Group = $t.name
-            }
-            $i++; $prefix = '{0:D2}' -f $i
-            $allItems += @{
-                Key = "${prefix}_$($t.super.label)-R"; Label = "$($t.super.label)-R"
-                Tool = "$($t.super.label)-R"; Command = $t.command; Icon = $t.icon; Group = $t.name
-            }
+            Key = ('{0}_{1}' -f $i.ToString("D$width"), $definition.Label)
+            Label = $definition.Label
+            Tool = $definition.Tool; Command = $t.command; Icon = $t.icon; Group = $t.name
         }
     }
 
     return $allItems
+}
+
+function Get-MenuRegistryRoots {
+    return @(
+        'HKCU:\Software\Classes\Directory\shell',
+        'HKCU:\Software\Classes\Directory\Background\shell'
+    )
+}
+
+function Get-MenuKeyLabel {
+    param([Parameter(Mandatory = $true)][string]$Key)
+    return ($Key -replace '^\d+_', '')
+}
+
+function Find-ConfiguredMenuItem {
+    <# 通过键名、去掉数字前缀的键名或 MUIVerb 匹配配置中的菜单项。 #>
+    param(
+        [Parameter(Mandatory = $true)][string]$Key,
+        [string]$Label,
+        [Parameter(Mandatory = $true)][object[]]$ConfiguredItems
+    )
+
+    $keyLabel = Get-MenuKeyLabel -Key $Key
+    foreach ($item in $ConfiguredItems) {
+        if ($item.Key -eq $Key -or $item.Label -eq $keyLabel -or
+            ($Label -and $item.Label -eq $Label)) {
+            return $item
+        }
+    }
+    return $null
+}
+
+function Read-NumberList {
+    <#
+        读取编号列表，保留输入顺序并去重。
+        返回 $null 表示输入无效；返回空数组表示取消。
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$Prompt,
+        [Parameter(Mandatory = $true)][int]$Max,
+        [int]$Min = 1
+    )
+
+    try {
+        $choice = Read-Host $Prompt
+    } catch {
+        return ,@()
+    }
+    if ([string]::IsNullOrWhiteSpace($choice)) {
+        return ,@()
+    }
+
+    $numbers = @()
+    foreach ($token in ($choice.Trim() -split '[,，、;；>\s]+')) {
+        if ([string]::IsNullOrWhiteSpace($token)) {
+            continue
+        }
+        $number = 0
+        if (-not [int]::TryParse($token, [ref]$number) -or
+            $number -lt $Min -or $number -gt $Max) {
+            Write-Host "无效的编号: $token" -ForegroundColor Red
+            return $null
+        }
+        if ($number -notin $numbers) {
+            $numbers += $number
+        }
+    }
+    return ,$numbers
+}
+
+function Get-RegisteredMenuGroupOrder {
+    <# 按注册表中当前的显示顺序返回已注册的工具名称。 #>
+    param([Parameter(Mandatory = $true)]$Config)
+
+    $configuredItems = @(Get-MenuItems -Config $Config)
+    $order = New-Object System.Collections.Generic.List[string]
+    foreach ($root in Get-MenuRegistryRoots) {
+        $shellPath = Join-Path (Join-Path $root $Config.menuName) 'shell'
+        if (-not (Test-Path -LiteralPath $shellPath)) {
+            continue
+        }
+        Get-ChildItem -LiteralPath $shellPath -ErrorAction SilentlyContinue |
+            Sort-Object PSChildName | ForEach-Object {
+                $item = Find-ConfiguredMenuItem -Key $_.PSChildName `
+                    -Label $_.GetValue('MUIVerb') -ConfiguredItems $configuredItems
+                if ($item -and -not $order.Contains($item.Group)) {
+                    $order.Add($item.Group)
+                }
+            }
+    }
+    return @($order)
 }
 
 function Select-MenuTools {
@@ -1588,6 +1721,7 @@ function Select-MenuTools {
     }
 
     $allItems = @(Get-MenuItems -Config $Config)
+    $currentOrder = @(Get-RegisteredMenuGroupOrder -Config $Config)
     Write-Host ''
     Write-Host '请选择要安装的 AI 工具菜单:' -ForegroundColor Cyan
     Write-Host ''
@@ -1598,43 +1732,500 @@ function Select-MenuTools {
         $color = if ($installed) { 'Green' } else { 'DarkGray' }
         $labels = @($allItems | Where-Object { $_.Group -eq $tool.name } |
             ForEach-Object { $_.Label })
-        Write-Host "  $($i + 1)) $($tool.name) [$status] ($($labels -join ', '))" `
+        $menuMark = if ($tool.name -in $currentOrder) { ' [菜单已注册]' } else { '' }
+        Write-Host "  $($i + 1)) $($tool.name) [$status]$menuMark ($($labels -join ', '))" `
             -ForegroundColor $color
     }
     Write-Host ''
+    if ($currentOrder.Count -gt 0) {
+        $currentNumbers = @($currentOrder | ForEach-Object {
+            $name = $_
+            for ($i = 0; $i -lt $tools.Count; $i++) {
+                if ($tools[$i].name -eq $name) { $i + 1 }
+            }
+        })
+        Write-Host "  当前菜单顺序: $($currentOrder -join ' > ')（输入 $($currentNumbers -join ' ') 可保持不变）" `
+            -ForegroundColor DarkGray
+    }
+    Write-Host '  提示: 编号的输入顺序即右键菜单中的显示顺序，例如 5 1 2 会把第 5 项排在最前。' `
+        -ForegroundColor DarkGray
+    Write-Host ''
 
-    try {
-        $choice = Read-Host '输入编号（可用逗号或空格多选，直接回车取消）'
-    } catch {
+    $numbers = Read-NumberList -Prompt '输入编号（可用逗号或空格多选，直接回车取消）' -Max $tools.Count
+    if ($null -eq $numbers) {
+        Write-Host '编号无效，已取消安装。' -ForegroundColor Red
         return @()
     }
-    if ([string]::IsNullOrWhiteSpace($choice)) {
+    if ($numbers.Count -eq 0) {
         Write-Host '未选择任何工具菜单，已取消安装。' -ForegroundColor Yellow
         return @()
     }
+    return @($numbers | ForEach-Object { $tools[$_ - 1] })
+}
 
-    $selectedIndexes = @()
-    foreach ($token in ($choice.Trim() -split '[,，、;；\s]+')) {
-        if ([string]::IsNullOrWhiteSpace($token)) {
+# ============================================================
+# 调整菜单顺序
+# ============================================================
+function Set-MenuOrder {
+    $config = Get-Config
+    $configuredItems = @(Get-MenuItems -Config $config)
+    $currentOrder = @(Get-RegisteredMenuGroupOrder -Config $config)
+
+    if ($currentOrder.Count -eq 0) {
+        Write-Host ''
+        Write-Host "未找到已注册的 $($config.menuName) 工具菜单，请先安装右键菜单。" -ForegroundColor Yellow
+        return
+    }
+    if ($currentOrder.Count -eq 1) {
+        Write-Host ''
+        Write-Host "当前只注册了 $($currentOrder[0]) 一个工具，无需调整顺序。" -ForegroundColor Yellow
+        return
+    }
+
+    Write-Host ''
+    Write-Host '当前右键菜单顺序:' -ForegroundColor Cyan
+    Write-Host ''
+    for ($i = 0; $i -lt $currentOrder.Count; $i++) {
+        Write-Host "  $($i + 1)) $($currentOrder[$i])"
+    }
+    Write-Host ''
+    Write-Host '  按期望顺序输入编号，例如 3 1 2；未输入的工具保持原相对顺序排在后面。' `
+        -ForegroundColor DarkGray
+
+    $numbers = Read-NumberList -Prompt '新顺序（直接回车取消）' -Max $currentOrder.Count
+    if ($null -eq $numbers) {
+        Write-Host '编号无效，已取消调整。' -ForegroundColor Red
+        return
+    }
+    if ($numbers.Count -eq 0) {
+        Write-Host '未输入新顺序，已取消调整。' -ForegroundColor Yellow
+        return
+    }
+
+    $newOrder = @($numbers | ForEach-Object { $currentOrder[$_ - 1] })
+    $newOrder += @($currentOrder | Where-Object { $_ -notin $newOrder })
+
+    foreach ($root in Get-MenuRegistryRoots) {
+        $shellPath = Join-Path (Join-Path $root $config.menuName) 'shell'
+        if (-not (Test-Path -LiteralPath $shellPath)) {
             continue
         }
-        $number = 0
-        if (-not [int]::TryParse($token, [ref]$number) -or
-            $number -lt 1 -or $number -gt $tools.Count) {
-            Write-Host "无效的工具编号: $token，已取消安装。" -ForegroundColor Red
-            return @()
+
+        $entries = @()
+        $position = 0
+        foreach ($child in @(Get-ChildItem -LiteralPath $shellPath -ErrorAction SilentlyContinue |
+                Sort-Object PSChildName)) {
+            $position++
+            $item = Find-ConfiguredMenuItem -Key $child.PSChildName `
+                -Label $child.GetValue('MUIVerb') -ConfiguredItems $configuredItems
+            $groupRank = if ($item) { [array]::IndexOf($newOrder, $item.Group) } else { -1 }
+            if ($groupRank -lt 0) { $groupRank = $newOrder.Count }
+            $itemRank = if ($item) { [array]::IndexOf($configuredItems, $item) } else { $position }
+            $entries += [pscustomobject]@{
+                Key = $child.PSChildName
+                Label = if ($item) { $item.Label } else { Get-MenuKeyLabel -Key $child.PSChildName }
+                GroupRank = $groupRank
+                ItemRank = $itemRank
+                Position = $position
+            }
         }
-        $index = $number - 1
-        if ($index -notin $selectedIndexes) {
-            $selectedIndexes += $index
+
+        $sorted = @($entries | Sort-Object GroupRank, ItemRank, Position)
+        $width = [math]::Max(2, ([string]$sorted.Count).Length)
+        $stamp = [guid]::NewGuid().ToString('N').Substring(0, 8)
+
+        # 两阶段重命名，避免新旧键名冲突。
+        for ($i = 0; $i -lt $sorted.Count; $i++) {
+            $sorted[$i] | Add-Member -NotePropertyName TempKey -NotePropertyValue "__vc_${stamp}_$i"
+            Rename-Item -LiteralPath (Join-Path $shellPath $sorted[$i].Key) -NewName $sorted[$i].TempKey
+        }
+        for ($i = 0; $i -lt $sorted.Count; $i++) {
+            $finalKey = '{0}_{1}' -f ($i + 1).ToString("D$width"), $sorted[$i].Label
+            Rename-Item -LiteralPath (Join-Path $shellPath $sorted[$i].TempKey) -NewName $finalKey
         }
     }
 
-    if ($selectedIndexes.Count -eq 0) {
-        Write-Host '未选择任何工具菜单，已取消安装。' -ForegroundColor Yellow
-        return @()
+    Write-Host ''
+    Write-Host "菜单顺序已更新: $($newOrder -join ' > ')" -ForegroundColor Green
+    Write-Host '新顺序立即生效，如未刷新请重新打开资源管理器窗口。' -ForegroundColor DarkGray
+}
+
+# ============================================================
+# CLI 代理（仅作用于 VibeCode 菜单启动的工具）
+# ============================================================
+$script:VibeCodeProxyVariables = @('HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY')
+$script:VibeCodeDefaultNoProxy = 'localhost,127.0.0.1,::1'
+$script:VibeCodeAppliedProxy = $null
+
+function ConvertTo-VibeCodeJsonString {
+    param([AllowEmptyString()][string]$Value)
+
+    $builder = New-Object System.Text.StringBuilder
+    [void]$builder.Append('"')
+    foreach ($char in $Value.ToCharArray()) {
+        switch ($char) {
+            '"' { [void]$builder.Append('\"') }
+            '\' { [void]$builder.Append('\\') }
+            "`n" { [void]$builder.Append('\n') }
+            "`r" { [void]$builder.Append('\r') }
+            "`t" { [void]$builder.Append('\t') }
+            default {
+                if ([int]$char -lt 0x20) {
+                    [void]$builder.AppendFormat('\u{0:x4}', [int]$char)
+                } else {
+                    [void]$builder.Append($char)
+                }
+            }
+        }
     }
-    return @($selectedIndexes | Sort-Object | ForEach-Object { $tools[$_] })
+    [void]$builder.Append('"')
+    return $builder.ToString()
+}
+
+function ConvertTo-VibeCodeJson {
+    <# 输出 2 空格缩进、不转义中文的 JSON，PowerShell 5.1/7 结果一致。 #>
+    param($Value, [int]$Depth = 0)
+
+    $indent = '  ' * ($Depth + 1)
+    $closing = '  ' * $Depth
+    if ($null -eq $Value) { return 'null' }
+    if ($Value -is [bool]) { return $Value.ToString().ToLowerInvariant() }
+    if ($Value -is [string] -or $Value -is [char]) {
+        return ConvertTo-VibeCodeJsonString -Value ([string]$Value)
+    }
+    if ($Value -is [int] -or $Value -is [long] -or $Value -is [double] -or
+        $Value -is [decimal] -or $Value -is [single]) {
+        return ([IFormattable]$Value).ToString($null, [Globalization.CultureInfo]::InvariantCulture)
+    }
+
+    $pairs = $null
+    if ($Value -is [Collections.IDictionary]) {
+        $pairs = @($Value.Keys | ForEach-Object { [pscustomobject]@{ Name = [string]$_; Value = $Value[$_] } })
+    } elseif ($Value -is [Management.Automation.PSCustomObject]) {
+        $pairs = @($Value.PSObject.Properties | ForEach-Object {
+            [pscustomobject]@{ Name = $_.Name; Value = $_.Value }
+        })
+    }
+    if ($null -ne $pairs) {
+        if ($pairs.Count -eq 0) { return '{}' }
+        $members = @($pairs | ForEach-Object {
+            '{0}{1}: {2}' -f $indent, (ConvertTo-VibeCodeJsonString -Value $_.Name),
+                (ConvertTo-VibeCodeJson -Value $_.Value -Depth ($Depth + 1))
+        })
+        return "{`r`n" + ($members -join ",`r`n") + "`r`n$closing}"
+    }
+
+    if ($Value -is [Collections.IEnumerable]) {
+        $elements = @($Value | ForEach-Object {
+            $indent + (ConvertTo-VibeCodeJson -Value $_ -Depth ($Depth + 1))
+        })
+        if ($elements.Count -eq 0) { return '[]' }
+        return "[`r`n" + ($elements -join ",`r`n") + "`r`n$closing]"
+    }
+
+    return ConvertTo-VibeCodeJsonString -Value ([string]$Value)
+}
+
+function Save-Config {
+    <# 保存项目 tools.json，并同步已部署副本，使右键菜单立即使用新配置。 #>
+    param([Parameter(Mandatory = $true)]$Config)
+
+    $json = (ConvertTo-VibeCodeJson -Value $Config) + "`r`n"
+    $null = $json | ConvertFrom-Json
+    $encoding = New-Object System.Text.UTF8Encoding($false)
+
+    $targets = @(Join-Path $PSScriptRoot 'tools.json')
+    $deployDir = Get-VibeCodeDeployDirectory -MenuName $Config.menuName
+    $deployedConfig = Join-Path $deployDir 'tools.json'
+    if (Test-Path -LiteralPath $deployedConfig -PathType Leaf) {
+        $targets += $deployedConfig
+    }
+    foreach ($target in $targets) {
+        [IO.File]::WriteAllText($target, $json, $encoding)
+    }
+
+    $deployedLauncher = Join-Path $deployDir 'Start-VibeCodeTool.ps1'
+    if (Test-Path -LiteralPath $deployedLauncher -PathType Leaf) {
+        Set-Content -LiteralPath $deployedLauncher -Value $EmbeddedLauncher -Encoding UTF8 -Force
+    }
+}
+
+function ConvertTo-ProxyUrl {
+    <# 规范化代理地址；无协议时补 http://，无效时返回 $null。 #>
+    param([string]$Value)
+
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        return $null
+    }
+    $candidate = $Value.Trim()
+    if ($candidate -notmatch '^[a-zA-Z][a-zA-Z0-9+.-]*://') {
+        $candidate = "http://$candidate"
+    }
+    $uri = $null
+    if (-not [Uri]::TryCreate($candidate, [UriKind]::Absolute, [ref]$uri)) {
+        return $null
+    }
+    if ($uri.Scheme -notin @('http', 'https', 'socks5', 'socks5h') -or
+        [string]::IsNullOrWhiteSpace($uri.Host) -or $uri.Port -le 0 -or
+        $uri.AbsolutePath -ne '/' -or $uri.Query) {
+        return $null
+    }
+    return $uri.GetLeftPart([UriPartial]::Authority)
+}
+
+function Get-SystemProxyUrl {
+    <# 读取 Windows「设置 > 网络 > 代理」中的手动代理（Clash、v2rayN 等通常写在这里）。 #>
+    $settings = Get-ItemProperty -LiteralPath `
+        'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' `
+        -ErrorAction SilentlyContinue
+    if (-not $settings -or $settings.ProxyEnable -ne 1 -or
+        [string]::IsNullOrWhiteSpace([string]$settings.ProxyServer)) {
+        return $null
+    }
+
+    $server = [string]$settings.ProxyServer
+    if ($server -notmatch '=') {
+        return ConvertTo-ProxyUrl -Value $server
+    }
+
+    $map = @{}
+    foreach ($part in $server -split ';') {
+        $pair = $part -split '=', 2
+        if ($pair.Count -eq 2) {
+            $map[$pair[0].Trim().ToLowerInvariant()] = $pair[1].Trim()
+        }
+    }
+    foreach ($protocol in @('https', 'http')) {
+        if ($map[$protocol]) {
+            return ConvertTo-ProxyUrl -Value $map[$protocol]
+        }
+    }
+    if ($map['socks']) {
+        return ConvertTo-ProxyUrl -Value ('socks5://' + $map['socks'])
+    }
+    return $null
+}
+
+function Get-ProxyConfig {
+    param([Parameter(Mandatory = $true)]$Config)
+
+    $proxy = $Config.proxy
+    if ($proxy -and $proxy.enabled -and -not [string]::IsNullOrWhiteSpace([string]$proxy.url)) {
+        return [pscustomobject]@{
+            Url = [string]$proxy.url
+            NoProxy = if ($proxy.noProxy) { [string]$proxy.noProxy } else { $script:VibeCodeDefaultNoProxy }
+        }
+    }
+    return $null
+}
+
+function Use-VibeCodeProxy {
+    <# 让本管理脚本自身的联网操作（Node 清单、npm 安装）也使用已配置代理。 #>
+    param([Parameter(Mandatory = $true)]$Config)
+
+    $proxy = Get-ProxyConfig -Config $Config
+    if ($proxy) {
+        $env:HTTP_PROXY = $proxy.Url
+        $env:HTTPS_PROXY = $proxy.Url
+        $env:NO_PROXY = $proxy.NoProxy
+        $script:VibeCodeAppliedProxy = $proxy.Url
+    } elseif ($script:VibeCodeAppliedProxy) {
+        foreach ($name in $script:VibeCodeProxyVariables) {
+            Remove-Item -Path "env:$name" -ErrorAction SilentlyContinue
+        }
+        $script:VibeCodeAppliedProxy = $null
+    }
+}
+
+function Set-ProxyConfig {
+    param(
+        [Parameter(Mandatory = $true)]$Config,
+        [string]$Url,
+        [bool]$Enabled = $true,
+        [string]$NoProxy
+    )
+
+    $current = $Config.proxy
+    if (-not $Url -and $current) { $Url = [string]$current.url }
+    if (-not $NoProxy) {
+        $NoProxy = if ($current -and $current.noProxy) {
+            [string]$current.noProxy
+        } else {
+            $script:VibeCodeDefaultNoProxy
+        }
+    }
+
+    $value = [pscustomobject][ordered]@{
+        enabled = $Enabled
+        url = $Url
+        noProxy = $NoProxy
+    }
+    $Config | Add-Member -NotePropertyName 'proxy' -NotePropertyValue $value -Force
+    Save-Config -Config $Config
+    Use-VibeCodeProxy -Config $Config
+}
+
+function Test-ProxyConnection {
+    param([Parameter(Mandatory = $true)][string]$Url)
+
+    $curl = Get-Command 'curl.exe' -CommandType Application -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if (-not $curl) {
+        Write-Host '  [--] 未找到 curl.exe，无法测试连通性。' -ForegroundColor Yellow
+        return
+    }
+
+    Write-Host "  通过 $Url 测试连接..." -ForegroundColor Cyan
+    foreach ($target in @(
+        'https://www.google.com/generate_204',
+        'https://antigravity.google',
+        'https://api.anthropic.com',
+        'https://api.openai.com'
+    )) {
+        $code = & $curl.Source --silent --output NUL --write-out '%{http_code}' `
+            --connect-timeout 8 --max-time 12 --proxy $Url $target 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "  [OK] $target (HTTP $code)" -ForegroundColor Green
+        } else {
+            Write-Host "  [失败] $target (curl 退出码 $LASTEXITCODE)" -ForegroundColor Red
+        }
+    }
+}
+
+function Select-ProxyTools {
+    param([Parameter(Mandatory = $true)]$Config)
+
+    $tools = @($Config.tools)
+    Write-Host ''
+    Write-Host '各工具代理设置:' -ForegroundColor Cyan
+    for ($i = 0; $i -lt $tools.Count; $i++) {
+        $direct = $tools[$i].useProxy -eq $false
+        $mode = if ($direct) { '直连' } else { '走代理' }
+        $color = if ($direct) { 'Yellow' } else { 'Green' }
+        Write-Host "  $($i + 1)) $($tools[$i].name) [$mode]" -ForegroundColor $color
+    }
+    Write-Host ''
+
+    $numbers = Read-NumberList -Prompt '输入编号切换 走代理/直连（可多选，直接回车返回）' -Max $tools.Count
+    if ($null -eq $numbers -or $numbers.Count -eq 0) {
+        return
+    }
+    foreach ($number in $numbers) {
+        $tool = $tools[$number - 1]
+        if ($tool.useProxy -eq $false) {
+            $tool.PSObject.Properties.Remove('useProxy')
+            Write-Host "  $($tool.name) -> 走代理" -ForegroundColor Green
+        } else {
+            $tool | Add-Member -NotePropertyName 'useProxy' -NotePropertyValue $false -Force
+            Write-Host "  $($tool.name) -> 直连" -ForegroundColor Yellow
+        }
+    }
+    Save-Config -Config $Config
+    Write-Host '已保存，下次从右键菜单启动时生效。' -ForegroundColor Green
+}
+
+function Show-ProxyStatus {
+    param([Parameter(Mandatory = $true)]$Config)
+
+    $proxy = Get-ProxyConfig -Config $Config
+    if ($proxy) {
+        Write-Host "  [已启用] $($proxy.Url)  (NO_PROXY=$($proxy.NoProxy))" -ForegroundColor Green
+    } elseif ($Config.proxy -and $Config.proxy.url) {
+        Write-Host "  [已停用] $($Config.proxy.url)" -ForegroundColor DarkGray
+    } else {
+        Write-Host '  [未配置] 工具将继承启动环境，通常为直连' -ForegroundColor DarkGray
+    }
+    $directTools = @($Config.tools | Where-Object { $_.useProxy -eq $false } |
+        ForEach-Object { $_.name })
+    if ($directTools.Count -gt 0) {
+        Write-Host "  强制直连的工具: $($directTools -join ', ')" -ForegroundColor Yellow
+    }
+}
+
+function Configure-CliProxy {
+    while ($true) {
+        $config = Get-Config
+        $systemProxy = Get-SystemProxyUrl
+
+        Write-Host ''
+        Write-Host 'CLI 代理（只作用于 VibeCode 右键菜单启动的工具）:' -ForegroundColor Cyan
+        Show-ProxyStatus -Config $config
+        $systemText = if ($systemProxy) { $systemProxy } else { '未检测到' }
+        Write-Host "  Windows 系统代理: $systemText" -ForegroundColor DarkGray
+        Write-Host ''
+        Write-Host "  1) 使用系统代理 ($systemText)"
+        Write-Host '  2) 手动输入代理地址'
+        Write-Host '  3) 设置哪些工具直连'
+        Write-Host '  4) 测试代理连通性'
+        Write-Host '  5) 停用代理'
+        Write-Host '  0) 返回'
+        Write-Host ''
+
+        try {
+            $choice = Read-Host '请选择操作'
+        } catch {
+            return
+        }
+        $choice = if ($choice) { $choice.Trim() } else { '' }
+
+        if ($choice -eq '1') {
+            if (-not $systemProxy) {
+                Write-Host '未检测到 Windows 系统代理，请先开启代理软件的系统代理，或选择手动输入。' `
+                    -ForegroundColor Yellow
+            } else {
+                Set-ProxyConfig -Config $config -Url $systemProxy
+                Write-Host "已启用代理: $systemProxy" -ForegroundColor Green
+            }
+        } elseif ($choice -eq '2') {
+            $example = if ($systemProxy) { $systemProxy } else { 'http://127.0.0.1:7890' }
+            try {
+                $inputUrl = Read-Host "代理地址（如 $example，支持 http/https/socks5）"
+            } catch {
+                continue
+            }
+            $url = ConvertTo-ProxyUrl -Value $inputUrl
+            if (-not $url) {
+                Write-Host "代理地址无效: $inputUrl" -ForegroundColor Red
+            } else {
+                $currentNoProxy = if ($config.proxy -and $config.proxy.noProxy) {
+                    [string]$config.proxy.noProxy
+                } else {
+                    $script:VibeCodeDefaultNoProxy
+                }
+                try {
+                    $noProxy = Read-Host "NO_PROXY（直接回车保持 $currentNoProxy）"
+                } catch {
+                    $noProxy = ''
+                }
+                if ([string]::IsNullOrWhiteSpace($noProxy)) {
+                    $noProxy = $currentNoProxy
+                }
+                Set-ProxyConfig -Config $config -Url $url -NoProxy $noProxy.Trim()
+                Write-Host "已启用代理: $url" -ForegroundColor Green
+            }
+        } elseif ($choice -eq '3') {
+            Select-ProxyTools -Config $config
+        } elseif ($choice -eq '4') {
+            $proxy = Get-ProxyConfig -Config $config
+            $target = if ($proxy) { $proxy.Url } else { $systemProxy }
+            if ($target) {
+                Test-ProxyConnection -Url $target
+            } else {
+                Write-Host '尚未配置代理，也未检测到系统代理。' -ForegroundColor Yellow
+            }
+        } elseif ($choice -eq '5') {
+            if ($config.proxy) {
+                Set-ProxyConfig -Config $config -Enabled $false
+                Write-Host '代理已停用（地址已保留，可随时重新启用）。' -ForegroundColor Green
+            } else {
+                Write-Host '尚未配置代理。' -ForegroundColor Yellow
+            }
+        } elseif ($choice -in @('', '0', 'q')) {
+            return
+        } else {
+            Write-Host '无效选择，请重新输入。' -ForegroundColor Yellow
+        }
+    }
 }
 
 # ============================================================
@@ -1669,7 +2260,12 @@ function Install-Menu {
         Test-ToolInstalled -CommandName $_.command
     })
     $availableGroups = @($availableTools | ForEach-Object { $_.name })
-    $items = @($allItems | Where-Object { $_.Group -in $availableGroups })
+    # 按本次选择的顺序重新编号，使右键菜单顺序与输入顺序一致。
+    $items = if ($availableTools.Count -gt 0) {
+        @(Get-MenuItems -Config $config -Tools $availableTools)
+    } else {
+        @()
+    }
     $skipped = @($selectedTools | Where-Object {
         -not (Test-ToolInstalled -CommandName $_.command)
     })
@@ -1682,9 +2278,11 @@ function Install-Menu {
     }
 
     Write-Host ""
-    Write-Host '将安装以下工具菜单:' -ForegroundColor Green
+    Write-Host '将按以下顺序安装工具菜单:' -ForegroundColor Green
+    $order = 0
     $availableTools | ForEach-Object {
-        Write-Host "  [OK] $($_.name)"
+        $order++
+        Write-Host "  [OK] $order. $($_.name)"
     }
     if ($skipped.Count -gt 0) {
         Write-Host 'CLI 未安装（菜单已跳过）:' -ForegroundColor DarkGray
@@ -1725,11 +2323,7 @@ function Install-Menu {
         Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $deployDir $_.Name) -Force
     }
 
-    $roots = @(
-        'HKCU:\Software\Classes\Directory\shell',
-        'HKCU:\Software\Classes\Directory\Background\shell'
-    )
-    $configuredKeys = @($allItems | ForEach-Object { $_.Key })
+    $roots = @(Get-MenuRegistryRoots)
     $configuredLabels = @($allItems | ForEach-Object { $_.Label })
 
     foreach ($root in $roots) {
@@ -1754,7 +2348,8 @@ function Install-Menu {
         if (Test-Path -LiteralPath $shellPath) {
             Get-ChildItem -LiteralPath $shellPath -ErrorAction SilentlyContinue | ForEach-Object {
                 $label = $_.GetValue('MUIVerb')
-                if ($_.PSChildName -in $configuredKeys -or $label -in $configuredLabels) {
+                $keyLabel = Get-MenuKeyLabel -Key $_.PSChildName
+                if ($keyLabel -in $configuredLabels -or $label -in $configuredLabels) {
                     Remove-Item -LiteralPath $_.PSPath -Recurse -Force
                 }
             }
@@ -1772,15 +2367,16 @@ function Install-Menu {
                 New-ItemProperty -Path $itemPath -Name 'Icon' -Value $iconPath -PropertyType String -Force | Out-Null
             }
 
-            $cmd = '"{0}" -d "{1}" "{2}" -NoExit -ExecutionPolicy Bypass -File "{3}" -Tool "{4}" -Path "{1}"' -f $terminalPath, $token, $powerShellPath, $launcherPath, $item.Tool
+            $cmd = '"{0}" -d "{1}" "{2}" -NoLogo -NoExit -ExecutionPolicy Bypass -File "{3}" -Tool "{4}" -Path "{1}"' -f $terminalPath, $token, $powerShellPath, $launcherPath, $item.Tool
             Set-ItemProperty -Path $commandPath -Name '(default)' -Value $cmd
         }
     }
 
     Write-Host ""
     Write-Host "安装完成！已部署到: $deployDir" -ForegroundColor Green
-    Write-Host "已安装菜单: $($availableGroups -join ', ')" -ForegroundColor Green
+    Write-Host "已安装菜单: $($availableGroups -join ' > ')" -ForegroundColor Green
     Write-Host "右键文件夹或文件夹空白处，即可看到 $($config.menuLabel) 菜单。" -ForegroundColor Cyan
+    Write-Host '之后可在主菜单选择 7) 调整右键菜单顺序。' -ForegroundColor DarkGray
     $selectedApiCommands = @($availableTools | Where-Object {
         $_.command -in @('codex', 'claude')
     } | ForEach-Object { $_.command })
@@ -1796,10 +2392,7 @@ function Uninstall-Menu {
     $config = Get-Config
     $menuName = $config.menuName
 
-    $roots = @(
-        'HKCU:\Software\Classes\Directory\shell',
-        'HKCU:\Software\Classes\Directory\Background\shell'
-    )
+    $roots = @(Get-MenuRegistryRoots)
 
     $registeredItems = @{}
     foreach ($root in $roots) {
@@ -1826,13 +2419,11 @@ function Uninstall-Menu {
     $configuredItems = @(Get-MenuItems -Config $config)
     $groups = @()
     foreach ($tool in $config.tools) {
-        $toolItems = @($configuredItems | Where-Object { $_.Group -eq $tool.name })
         $keys = @($registeredItems.Values | Where-Object {
-            $registeredItem = $_
-            @($toolItems | Where-Object {
-                $_.Key -eq $registeredItem.Key -or $_.Label -eq $registeredItem.Label
-            }).Count -gt 0
-        } | ForEach-Object { $_.Key } | Select-Object -Unique)
+            $item = Find-ConfiguredMenuItem -Key $_.Key -Label $_.Label `
+                -ConfiguredItems $configuredItems
+            $item -and $item.Group -eq $tool.name
+        } | ForEach-Object { $_.Key } | Sort-Object -Unique)
 
         if ($keys.Count -gt 0) {
             $groups += [pscustomobject]@{
@@ -1866,14 +2457,22 @@ function Uninstall-Menu {
     }
     Write-Host ""
 
-    $choice = Read-Host "输入 AI 工具编号卸载（逗号分隔），输入 0 全部卸载"
+    try {
+        $choice = Read-Host "输入 AI 工具编号卸载（逗号或空格分隔），输入 0 全部卸载"
+    } catch {
+        return
+    }
+    if ([string]::IsNullOrWhiteSpace($choice)) {
+        Write-Host "未选择任何 AI 工具，已取消。" -ForegroundColor Yellow
+        return
+    }
 
     $removeAll = $choice.Trim() -eq '0'
     $selectedGroups = @()
     if ($removeAll) {
         $selectedGroups = @($groups)
     } else {
-        foreach ($c in ($choice -split ',')) {
+        foreach ($c in ($choice.Trim() -split '[,，、;；\s]+')) {
             $number = 0
             if ([int]::TryParse($c.Trim(), [ref]$number)) {
                 $idx = $number - 1
@@ -2017,6 +2616,19 @@ function Show-Status {
         Write-Host "  $status $($t.name) -> $($t.command)$superInfo" -ForegroundColor $color
     }
 
+    $menuOrder = @(Get-RegisteredMenuGroupOrder -Config $config)
+    Write-Host ''
+    Write-Host 'CLI 代理:' -ForegroundColor Cyan
+    Show-ProxyStatus -Config $config
+
+    Write-Host ''
+    Write-Host '右键菜单:' -ForegroundColor Cyan
+    if ($menuOrder.Count -gt 0) {
+        Write-Host "  当前顺序: $($menuOrder -join ' > ')" -ForegroundColor Green
+    } else {
+        Write-Host '  尚未注册任何工具菜单' -ForegroundColor DarkGray
+    }
+
     Write-Host ''
     Write-Host 'API 配置（Key 仅显示是否存在）:' -ForegroundColor Cyan
     Show-ApiConfigurationStatus
@@ -2042,6 +2654,7 @@ function Install-RuntimeDependencies {
 # ============================================================
 while ($true) {
     $config = Get-Config
+    Use-VibeCodeProxy -Config $config
     Write-Host ""
     Write-Host "========================================" -ForegroundColor Cyan
     Write-Host "  $($config.menuLabel) 工具管理" -ForegroundColor Cyan
@@ -2053,6 +2666,8 @@ while ($true) {
     Write-Host "  4) 安装/修复运行环境"
     Write-Host "  5) 安装/更新 Codex、Claude、OpenCode CLI"
     Write-Host "  6) 配置 Codex/Claude API"
+    Write-Host "  7) 调整右键菜单顺序"
+    Write-Host "  8) 配置 CLI 代理"
     Write-Host "  0/Q) 退出"
     Write-Host ""
 
@@ -2073,6 +2688,8 @@ while ($true) {
         '4' { Install-RuntimeDependencies }
         '5' { Install-AiCliTools -UpdateExisting }
         '6' { Configure-AiApiSettings }
+        '7' { Set-MenuOrder }
+        '8' { Configure-CliProxy }
         '0' { return }
         'q' { return }
         'qq' { return }

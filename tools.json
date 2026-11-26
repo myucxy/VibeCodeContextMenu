@@ -51,6 +51,18 @@
           "command": "grok --always-approve -r"
         }
       }
+    },
+    {
+      "name": "agy",
+      "command": "agy",
+      "icon": "agy.ico",
+      "super": {
+        "command": "agy --dangerously-skip-permissions",
+        "label": "agySuper",
+        "resume": {
+          "command": "agy --dangerously-skip-permissions -c"
+        }
+      }
     }
   ]
 }
