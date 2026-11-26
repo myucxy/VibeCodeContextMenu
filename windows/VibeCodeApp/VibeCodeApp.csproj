@@ -1,0 +1,58 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+
+    <AssemblyName>VibeCode</AssemblyName>
+    <RootNamespace>VibeCodeApp</RootNamespace>
+    <Product>VibeCode Context Menu</Product>
+    <AssemblyTitle>VibeCode Context Menu</AssemblyTitle>
+    <Description>在资源管理器右键文件夹及空白处一键启动各类 AI CLI 工具</Description>
+    <Authors>清风惹尘丶</Authors>
+    <Company>清风惹尘丶</Company>
+    <Copyright>Copyright © 清风惹尘丶</Copyright>
+    <RepositoryUrl>https://github.com/myucxy/VibeCodeContextMenu</RepositoryUrl>
+    <Version Condition="'$(Version)' == ''">1.0.0</Version>
+
+    <ApplicationIcon>..\..\ico\vibecode.ico</ApplicationIcon>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <DebugType>none</DebugType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 默认打包项目根目录 tools.json；pack.ps1 可通过 CleanToolsJsonPath 传入剔除本机代理后的纯净副本 -->
+    <EmbeddedResource Include="..\..\tools.json" Condition="'$(CleanToolsJsonPath)' == ''">
+      <LogicalName>VibeCodeApp.Resources.tools.json</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="$(CleanToolsJsonPath)" Condition="'$(CleanToolsJsonPath)' != ''">
+      <LogicalName>VibeCodeApp.Resources.tools.json</LogicalName>
+    </EmbeddedResource>
+
+    <!-- 内嵌全部官方图标，保证单文件 exe 在全新 Windows 机器上完全自包含 -->
+    <EmbeddedResource Include="..\..\ico\vibecode.ico">
+      <LogicalName>VibeCodeApp.Resources.ico.vibecode.ico</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\ico\claude.ico">
+      <LogicalName>VibeCodeApp.Resources.ico.claude.ico</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\ico\codex.ico">
+      <LogicalName>VibeCodeApp.Resources.ico.codex.ico</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\ico\opencode.ico">
+      <LogicalName>VibeCodeApp.Resources.ico.opencode.ico</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\ico\grok.ico">
+      <LogicalName>VibeCodeApp.Resources.ico.grok.ico</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\ico\agy.ico">
+      <LogicalName>VibeCodeApp.Resources.ico.agy.ico</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+
+</Project>

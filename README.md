@@ -323,6 +323,25 @@ Key 使用隐藏输入，并保存到当前用户环境变量；脚本状态页�
 
 > 使用免费/ad-hoc 签名打包分发时，其他 Mac 下载解压后如遇系统安全提示，在终端运行一次 `xattr -cr /Applications/VibeCode.app` 即可正常打开。
 
+## Windows 原生软件版（GUI + 系统托盘）
+
+除原有的 PowerShell 离线脚本版（`VibeCode.bat` / `VibeCode.ps1`）外，项目在 `windows/` 目录下同样提供与 macOS 版功能 1:1 对齐的原生桌面软件（`.NET 8 WinForms`）：
+
+- **纯图形三标签页管理**：支持「工具与右键菜单」（右键总开关、自动/平铺/按工具折叠二级菜单、普通/Super/恢复筛选、19 款主流 AI CLI 全量展示、未安装置灰禁选、拖拽排序、自定义增删改与自动生成品牌 `.ico` 图标）、「代理与终端」（自动检测本机 10 款主流 Windows 终端、读取系统代理与异步连通性测速）、「关于」。
+- **零 PowerShell 依赖启动**：内置 `VibeCode.exe --launch` 独立启动器，自动刷新环境与代理，彻底规避 Windows Terminal 单实例环境变量继承与 PowerShell 启动兼容性问题。
+- **自包含分发与版本号**：版本号统一维护在 `windows/VERSION`，支持编译单文件绿色便携 ZIP 与 Inno Setup 安装向导：
+
+```powershell
+# 本地编译并安装到 %LOCALAPPDATA%\VibeCode\VibeCode.exe
+.\windows\build.ps1
+
+# 打包带版本号的单文件便携 ZIP（默认 win-x64，可用 -Runtime all 同时打 x64 + arm64）
+.\windows\pack.ps1 -Runtime all
+
+# 同时生成 Inno Setup 安装向导 .exe（需已安装 Inno Setup 6）
+.\windows\pack.ps1 -Runtime win-x64 -InnoSetup
+```
+
 ### macOS 版特性
 
 - **原生级联右键菜单**：支持右键文件夹、右键目录空白处及侧边栏，自动覆盖外接磁盘/独立卷（`/Volumes/*`），并支持右键显示总开关。
