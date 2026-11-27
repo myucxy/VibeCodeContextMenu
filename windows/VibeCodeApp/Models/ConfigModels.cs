@@ -38,6 +38,13 @@ public sealed class ProxySettings
     [JsonPropertyName("enabled")]
     public bool Enabled { get; set; }
 
+    /// <summary>
+    /// system（实时跟随 Windows 系统代理） | manual（固定代理地址，省略时默认 manual）
+    /// </summary>
+    [JsonPropertyName("mode")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Mode { get; set; }
+
     [JsonPropertyName("url")]
     public string Url { get; set; } = string.Empty;
 

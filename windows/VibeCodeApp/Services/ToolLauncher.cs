@@ -258,7 +258,8 @@ public static class ToolLauncher
         ToolsConfig config,
         ResolvedLaunch entry)
     {
-        var setVars = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        // 使用 Ordinal 以便同时保留大写与小写代理变量（Git Bash 环境变量区分大小写）
+        var setVars = new Dictionary<string, string>(StringComparer.Ordinal);
         var unsetVars = new List<string>();
 
         // 1. 刷新用户与系统级 API Key 与 NVM 路径（兼容无需重启 Explorer）
@@ -275,26 +276,38 @@ public static class ToolLauncher
             }
         }
 
-        // 2. 代理控制（同时设置/清除大小写变量）
+        // 2. 代理控制（同时设置/清除大小写变量；支持 system 实时跟随与 manual 固定地址）
         var proxyNames = new[] { "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy" };
         if (!entry.UseProxy)
         {
             unsetVars.AddRange(proxyNames);
         }
-        else if (config.Proxy is { Enabled: true } proxy && !string.IsNullOrWhiteSpace(proxy.Url))
+        else if (config.Proxy is { Enabled: true } proxy)
         {
-            var url = proxy.Url.Trim();
-            var noProxy = string.IsNullOrWhiteSpace(proxy.NoProxy) ? AppMetadata.DefaultNoProxy : proxy.NoProxy.Trim();
-            setVars["HTTP_PROXY"] = url;
-            setVars["HTTPS_PROXY"] = url;
-            setVars["http_proxy"] = url;
-            setVars["https_proxy"] = url;
-            setVars["NO_PROXY"] = noProxy;
-            setVars["no_proxy"] = noProxy;
-            if (url.StartsWith("socks", StringComparison.OrdinalIgnoreCase))
+            var isSystemMode = string.Equals(proxy.Mode, "system", StringComparison.OrdinalIgnoreCase);
+            var url = isSystemMode
+                ? ProxyService.DetectWindowsSystemProxy()
+                : proxy.Url?.Trim();
+
+            if (!string.IsNullOrWhiteSpace(url))
             {
-                setVars["ALL_PROXY"] = url;
-                setVars["all_proxy"] = url;
+                var noProxy = string.IsNullOrWhiteSpace(proxy.NoProxy) ? AppMetadata.DefaultNoProxy : proxy.NoProxy.Trim();
+                setVars["HTTP_PROXY"] = url;
+                setVars["HTTPS_PROXY"] = url;
+                setVars["http_proxy"] = url;
+                setVars["https_proxy"] = url;
+                setVars["NO_PROXY"] = noProxy;
+                setVars["no_proxy"] = noProxy;
+                if (url.StartsWith("socks", StringComparison.OrdinalIgnoreCase))
+                {
+                    setVars["ALL_PROXY"] = url;
+                    setVars["all_proxy"] = url;
+                }
+            }
+            else if (isSystemMode)
+            {
+                // 跟随系统模式且系统代理当前未开启：清除残留代理变量，确保直连
+                unsetVars.AddRange(proxyNames);
             }
         }
 
@@ -358,6 +371,24 @@ public static class ToolLauncher
 
     private static string CmdEscape(string value) => value.Replace("%", "%%");
 
+    private static string CmdEscapeMeta(string value) => value
+        .Replace("^", "^^")
+        .Replace("%", "%%")
+        .Replace("&", "^&")
+        .Replace("|", "^|")
+        .Replace("<", "^<")
+        .Replace(">", "^>");
+
+    private static string FormatCmdSetLine(string key, string value)
+    {
+        // 值内含双引号（例如 OPENCODE_PERMISSION="allow"）时不能再用外层引号包裹，否则 CMD 会截断解析
+        if (value.Contains('"'))
+        {
+            return $"set {key}={CmdEscapeMeta(value)}";
+        }
+        return $"set \"{key}={CmdEscape(value)}\"";
+    }
+
     private static string WriteTempCmdRunner(
         string toolKey,
         string targetDir,
@@ -371,7 +402,7 @@ public static class ToolLauncher
 
         sb.AppendLine("@echo off");
         sb.AppendLine("chcp 65001 >nul");
-        sb.AppendLine($"title {title.Replace("&", "^&")}");
+        sb.AppendLine($"title {CmdEscapeMeta(title)}");
         sb.AppendLine($"cd /d \"{CmdEscape(targetDir)}\"");
         sb.AppendLine($"set \"PATH={CmdEscape(fullPath)}\"");
 
@@ -381,10 +412,10 @@ public static class ToolLauncher
         }
         foreach (var kv in setVars)
         {
-            sb.AppendLine($"set \"{kv.Key}={CmdEscape(kv.Value)}\"");
+            sb.AppendLine(FormatCmdSetLine(kv.Key, kv.Value));
         }
 
-        sb.AppendLine($"echo [VibeCode] {toolKey} -^> {targetDir}");
+        sb.AppendLine($"echo [VibeCode] {CmdEscapeMeta(toolKey)} -^> {CmdEscapeMeta(targetDir)}");
         sb.AppendLine($"call {entry.Command}");
 
         var path = Path.Combine(GetRunnersDirectory(), $"vibecode-{Guid.NewGuid():N}.cmd");

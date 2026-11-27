@@ -52,6 +52,7 @@ public static class IconService
 
     public static string EnsureMainIconPath()
     {
+        Directory.CreateDirectory(AppPaths.IconsDir);
         var path = Path.Combine(AppPaths.IconsDir, "vibecode.ico");
         if (File.Exists(path)) return path;
         GenerateBrandIco("VibeCode", path);

@@ -2,3 +2,5 @@ dev/
 dist/
 .claude/settings.local.json
 .DS_Store
+windows/VibeCodeApp/bin/
+windows/VibeCodeApp/obj/

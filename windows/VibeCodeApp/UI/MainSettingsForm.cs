@@ -47,6 +47,7 @@ public sealed class MainSettingsForm : Form
     private readonly Label _terminalDetectHintLabel = new();
     private List<DetectedTerminal> _detectedTerminals = new();
     private readonly CheckBox _proxyEnableCheck = new();
+    private readonly CheckBox _proxyFollowSystemCheck = new();
     private readonly Label _sysProxyHintLabel = new();
     private readonly Button _fillSysProxyBtn = new();
     private readonly TextBox _proxyUrlBox = new();
@@ -388,6 +389,16 @@ public sealed class MainSettingsForm : Form
         _proxyEnableCheck.AutoSize = true;
         _proxyEnableCheck.CheckedChanged += (_, _) =>
         {
+            UpdateProxyInputState();
+            if (!_suppressEvents) SaveProxySettings();
+        };
+
+        _proxyFollowSystemCheck.Text = "跟随 Windows 系统代理（开代理生效，关代理直连）";
+        _proxyFollowSystemCheck.Location = new Point(140, 6);
+        _proxyFollowSystemCheck.AutoSize = true;
+        _proxyFollowSystemCheck.CheckedChanged += (_, _) =>
+        {
+            UpdateProxyInputState();
             if (!_suppressEvents) SaveProxySettings();
         };
 
@@ -450,7 +461,7 @@ public sealed class MainSettingsForm : Form
         };
 
         proxyForm.Controls.AddRange([
-            _proxyEnableCheck, _sysProxyHintLabel, _fillSysProxyBtn,
+            _proxyEnableCheck, _proxyFollowSystemCheck, _sysProxyHintLabel, _fillSysProxyBtn,
             urlLbl, _proxyUrlBox, noProxyLbl, _noProxyBox,
             _saveProxyBtn, _testProxyBtn, _proxyFeedbackLabel, directTip
         ]);
@@ -791,6 +802,7 @@ public sealed class MainSettingsForm : Form
             // 代理信息
             var proxy = toolsCfg.Proxy;
             _proxyEnableCheck.Checked = proxy?.Enabled == true;
+            _proxyFollowSystemCheck.Checked = string.Equals(proxy?.Mode, "system", StringComparison.OrdinalIgnoreCase);
             _proxyUrlBox.Text = proxy?.Url ?? string.Empty;
             _noProxyBox.Text = string.IsNullOrWhiteSpace(proxy?.NoProxy) ? AppMetadata.DefaultNoProxy : proxy.NoProxy;
 
@@ -802,9 +814,10 @@ public sealed class MainSettingsForm : Form
             }
             else
             {
-                _sysProxyHintLabel.Text = "未检测到 Windows 系统代理（可手动填写代理地址）";
+                _sysProxyHintLabel.Text = "未检测到 Windows 系统代理（可勾选「跟随系统」或手动填写地址）";
                 _fillSysProxyBtn.Enabled = false;
             }
+            UpdateProxyInputState();
         }
         finally
         {
@@ -1099,6 +1112,13 @@ public sealed class MainSettingsForm : Form
         ConfigService.SaveWindowsConfig(winCfg);
     }
 
+    private void UpdateProxyInputState()
+    {
+        var followSystem = _proxyFollowSystemCheck.Checked;
+        _proxyUrlBox.Enabled = !followSystem;
+        _fillSysProxyBtn.Enabled = !followSystem && !string.IsNullOrWhiteSpace(_detectedSystemProxy);
+    }
+
     private void HandleFillSystemProxy()
     {
         _detectedSystemProxy = ProxyService.DetectWindowsSystemProxy();
@@ -1110,6 +1130,7 @@ public sealed class MainSettingsForm : Form
         }
 
         _suppressEvents = true;
+        _proxyFollowSystemCheck.Checked = false;
         _proxyUrlBox.Text = _detectedSystemProxy;
         if (string.IsNullOrWhiteSpace(_noProxyBox.Text))
         {
@@ -1117,12 +1138,14 @@ public sealed class MainSettingsForm : Form
         }
         _proxyEnableCheck.Checked = true;
         _suppressEvents = false;
+        UpdateProxyInputState();
         SaveProxySettings();
     }
 
     private void SaveProxySettings()
     {
         var enabled = _proxyEnableCheck.Checked;
+        var followSystem = _proxyFollowSystemCheck.Checked;
         var rawUrl = _proxyUrlBox.Text.Trim();
         var noProxy = string.IsNullOrWhiteSpace(_noProxyBox.Text) ? AppMetadata.DefaultNoProxy : _noProxyBox.Text.Trim();
 
@@ -1132,16 +1155,22 @@ public sealed class MainSettingsForm : Form
             var normalized = ProxyService.NormalizeProxyUrl(rawUrl);
             if (normalized is null)
             {
-                _proxyFeedbackLabel.Text = "代理地址格式无效（示例: http://127.0.0.1:7897）";
-                _proxyFeedbackLabel.ForeColor = Color.Crimson;
-                return;
+                if (!followSystem)
+                {
+                    _proxyFeedbackLabel.Text = "代理地址格式无效（示例: http://127.0.0.1:7897）";
+                    _proxyFeedbackLabel.ForeColor = Color.Crimson;
+                    return;
+                }
             }
-            finalUrl = normalized;
-            _proxyUrlBox.Text = normalized;
+            else
+            {
+                finalUrl = normalized;
+                _proxyUrlBox.Text = normalized;
+            }
         }
-        else if (enabled)
+        else if (enabled && !followSystem)
         {
-            _proxyFeedbackLabel.Text = "请先填写代理地址或点击「填入系统代理」";
+            _proxyFeedbackLabel.Text = "请先填写代理地址、点击「填入系统代理」或勾选「跟随系统」";
             _proxyFeedbackLabel.ForeColor = Color.DarkOrange;
             _suppressEvents = true;
             _proxyEnableCheck.Checked = false;
@@ -1154,20 +1183,42 @@ public sealed class MainSettingsForm : Form
         toolsCfg.Proxy = new ProxySettings
         {
             Enabled = enabled,
+            Mode = followSystem ? "system" : "manual",
             Url = finalUrl,
             NoProxy = noProxy
         };
         ConfigService.SaveToolsConfig(toolsCfg);
 
-        _proxyFeedbackLabel.Text = enabled ? $"已启用代理: {finalUrl}" : "已停用 CLI 代理";
-        _proxyFeedbackLabel.ForeColor = enabled ? Color.ForestGreen : SystemColors.GrayText;
+        if (!enabled)
+        {
+            _proxyFeedbackLabel.Text = "已停用 CLI 代理";
+            _proxyFeedbackLabel.ForeColor = SystemColors.GrayText;
+        }
+        else if (followSystem)
+        {
+            _detectedSystemProxy = ProxyService.DetectWindowsSystemProxy();
+            _proxyFeedbackLabel.Text = !string.IsNullOrWhiteSpace(_detectedSystemProxy)
+                ? $"已启用（跟随系统: {_detectedSystemProxy}）"
+                : "已启用（跟随系统，当前未开启代理将直连）";
+            _proxyFeedbackLabel.ForeColor = Color.ForestGreen;
+        }
+        else
+        {
+            _proxyFeedbackLabel.Text = $"已启用固定代理: {finalUrl}";
+            _proxyFeedbackLabel.ForeColor = Color.ForestGreen;
+        }
     }
 
     private async Task HandleTestProxyAsync()
     {
+        var followSystem = _proxyFollowSystemCheck.Checked;
         var rawUrl = _proxyUrlBox.Text.Trim();
         string? targetProxy;
-        if (!string.IsNullOrEmpty(rawUrl))
+        if (followSystem)
+        {
+            targetProxy = ProxyService.DetectWindowsSystemProxy();
+        }
+        else if (!string.IsNullOrEmpty(rawUrl))
         {
             targetProxy = ProxyService.NormalizeProxyUrl(rawUrl);
             if (targetProxy is null)

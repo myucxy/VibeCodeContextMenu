@@ -133,19 +133,68 @@ if (-not $toolMap.ContainsKey($Tool)) {
 $entry = $toolMap[$Tool]
 
 # CLI 程序（如 agy）不读取 Windows 系统代理，只认 HTTP(S)_PROXY 环境变量。
+function Get-LauncherSystemProxyUrl {
+    $settings = Get-ItemProperty -LiteralPath `
+        'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' `
+        -ErrorAction SilentlyContinue
+    if (-not $settings -or $settings.ProxyEnable -ne 1 -or
+        [string]::IsNullOrWhiteSpace([string]$settings.ProxyServer)) {
+        return $null
+    }
+    $server = [string]$settings.ProxyServer
+    $raw = $null
+    if ($server -notmatch '=') {
+        $raw = $server.Trim()
+    } else {
+        $map = @{}
+        foreach ($part in $server -split ';') {
+            $pair = $part -split '=', 2
+            if ($pair.Count -eq 2) {
+                $map[$pair[0].Trim().ToLowerInvariant()] = $pair[1].Trim()
+            }
+        }
+        foreach ($protocol in @('https', 'http')) {
+            if ($map[$protocol]) { $raw = $map[$protocol]; break }
+        }
+        if (-not $raw -and $map['socks']) {
+            $raw = 'socks5://' + $map['socks']
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($raw)) { return $null }
+    if ($raw -notmatch '^[a-zA-Z][a-zA-Z0-9+.-]*://') { $raw = "http://$raw" }
+    $uri = $null
+    if ([Uri]::TryCreate($raw, [UriKind]::Absolute, [ref]$uri) -and
+        $uri.Scheme -in @('http', 'https', 'socks5', 'socks5h') -and
+        -not [string]::IsNullOrWhiteSpace($uri.Host) -and $uri.Port -gt 0) {
+        return $uri.GetLeftPart([UriPartial]::Authority)
+    }
+    return $null
+}
+
 $proxyVariables = @('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY')
 if (-not $entry.UseProxy) {
     foreach ($name in $proxyVariables) {
         Remove-Item -Path "env:$name" -ErrorAction SilentlyContinue
     }
-} elseif ($config.proxy -and $config.proxy.enabled -and
-    -not [string]::IsNullOrWhiteSpace([string]$config.proxy.url)) {
-    $env:HTTP_PROXY = [string]$config.proxy.url
-    $env:HTTPS_PROXY = [string]$config.proxy.url
-    $env:NO_PROXY = if ($config.proxy.noProxy) {
-        [string]$config.proxy.noProxy
+} elseif ($config.proxy -and $config.proxy.enabled) {
+    $proxyMode = if ($config.proxy.mode) { ([string]$config.proxy.mode).ToLowerInvariant() } else { 'manual' }
+    $proxyUrl = if ($proxyMode -eq 'system') {
+        Get-LauncherSystemProxyUrl
     } else {
-        'localhost,127.0.0.1,::1'
+        [string]$config.proxy.url
+    }
+    if (-not [string]::IsNullOrWhiteSpace($proxyUrl)) {
+        $env:HTTP_PROXY = $proxyUrl
+        $env:HTTPS_PROXY = $proxyUrl
+        $env:NO_PROXY = if ($config.proxy.noProxy) {
+            [string]$config.proxy.noProxy
+        } else {
+            'localhost,127.0.0.1,::1'
+        }
+    } elseif ($proxyMode -eq 'system') {
+        foreach ($name in $proxyVariables) {
+            Remove-Item -Path "env:$name" -ErrorAction SilentlyContinue
+        }
     }
 }
 
@@ -2010,9 +2059,19 @@ function Get-ProxyConfig {
     param([Parameter(Mandatory = $true)]$Config)
 
     $proxy = $Config.proxy
-    if ($proxy -and $proxy.enabled -and -not [string]::IsNullOrWhiteSpace([string]$proxy.url)) {
+    if (-not $proxy -or -not $proxy.enabled) {
+        return $null
+    }
+    $mode = if ($proxy.mode) { ([string]$proxy.mode).ToLowerInvariant() } else { 'manual' }
+    $url = if ($mode -eq 'system') {
+        Get-SystemProxyUrl
+    } else {
+        [string]$proxy.url
+    }
+    if (-not [string]::IsNullOrWhiteSpace($url)) {
         return [pscustomobject]@{
-            Url = [string]$proxy.url
+            Mode = $mode
+            Url = $url
             NoProxy = if ($proxy.noProxy) { [string]$proxy.noProxy } else { $script:VibeCodeDefaultNoProxy }
         }
     }
@@ -2040,12 +2099,16 @@ function Use-VibeCodeProxy {
 function Set-ProxyConfig {
     param(
         [Parameter(Mandatory = $true)]$Config,
+        [ValidateSet('system', 'manual')][string]$Mode,
         [string]$Url,
         [bool]$Enabled = $true,
         [string]$NoProxy
     )
 
     $current = $Config.proxy
+    if (-not $Mode) {
+        $Mode = if ($current -and $current.mode) { ([string]$current.mode).ToLowerInvariant() } else { 'manual' }
+    }
     if (-not $Url -and $current) { $Url = [string]$current.url }
     if (-not $NoProxy) {
         $NoProxy = if ($current -and $current.noProxy) {
@@ -2057,6 +2120,7 @@ function Set-ProxyConfig {
 
     $value = [pscustomobject][ordered]@{
         enabled = $Enabled
+        mode = $Mode
         url = $Url
         noProxy = $NoProxy
     }
@@ -2127,11 +2191,20 @@ function Select-ProxyTools {
 function Show-ProxyStatus {
     param([Parameter(Mandatory = $true)]$Config)
 
+    $raw = $Config.proxy
     $proxy = Get-ProxyConfig -Config $Config
-    if ($proxy) {
-        Write-Host "  [已启用] $($proxy.Url)  (NO_PROXY=$($proxy.NoProxy))" -ForegroundColor Green
-    } elseif ($Config.proxy -and $Config.proxy.url) {
-        Write-Host "  [已停用] $($Config.proxy.url)" -ForegroundColor DarkGray
+    $mode = if ($raw -and $raw.mode) { ([string]$raw.mode).ToLowerInvariant() } else { 'manual' }
+    if ($raw -and $raw.enabled -and $mode -eq 'system') {
+        if ($proxy) {
+            Write-Host "  [已启用 - 跟随系统] $($proxy.Url)  (NO_PROXY=$($proxy.NoProxy))" -ForegroundColor Green
+        } else {
+            Write-Host '  [已启用 - 跟随系统] 当前系统代理未开启，将自动直连' -ForegroundColor Yellow
+        }
+    } elseif ($proxy) {
+        Write-Host "  [已启用 - 固定地址] $($proxy.Url)  (NO_PROXY=$($proxy.NoProxy))" -ForegroundColor Green
+    } elseif ($raw -and ($raw.url -or $mode -eq 'system')) {
+        $detail = if ($mode -eq 'system') { '跟随系统' } else { [string]$raw.url }
+        Write-Host "  [已停用] $detail" -ForegroundColor DarkGray
     } else {
         Write-Host '  [未配置] 工具将继承启动环境，通常为直连' -ForegroundColor DarkGray
     }
@@ -2150,14 +2223,15 @@ function Configure-CliProxy {
         Write-Host ''
         Write-Host 'CLI 代理（只作用于 VibeCode 右键菜单启动的工具）:' -ForegroundColor Cyan
         Show-ProxyStatus -Config $config
-        $systemText = if ($systemProxy) { $systemProxy } else { '未检测到' }
+        $systemText = if ($systemProxy) { $systemProxy } else { '未开启' }
         Write-Host "  Windows 系统代理: $systemText" -ForegroundColor DarkGray
         Write-Host ''
-        Write-Host "  1) 使用系统代理 ($systemText)"
-        Write-Host '  2) 手动输入代理地址'
-        Write-Host '  3) 设置哪些工具直连'
-        Write-Host '  4) 测试代理连通性'
-        Write-Host '  5) 停用代理'
+        Write-Host '  1) 跟随 Windows 系统代理（实时检测：开代理生效，关代理直连）'
+        Write-Host "  2) 固定使用当前系统代理 ($systemText)"
+        Write-Host '  3) 手动输入固定代理地址'
+        Write-Host '  4) 设置哪些工具直连'
+        Write-Host '  5) 测试代理连通性'
+        Write-Host '  6) 停用代理'
         Write-Host '  0) 返回'
         Write-Host ''
 
@@ -2169,14 +2243,21 @@ function Configure-CliProxy {
         $choice = if ($choice) { $choice.Trim() } else { '' }
 
         if ($choice -eq '1') {
-            if (-not $systemProxy) {
-                Write-Host '未检测到 Windows 系统代理，请先开启代理软件的系统代理，或选择手动输入。' `
-                    -ForegroundColor Yellow
+            Set-ProxyConfig -Config $config -Mode 'system' -Enabled $true
+            if ($systemProxy) {
+                Write-Host "已设为跟随系统代理（当前生效: $systemProxy）。" -ForegroundColor Green
             } else {
-                Set-ProxyConfig -Config $config -Url $systemProxy
-                Write-Host "已启用代理: $systemProxy" -ForegroundColor Green
+                Write-Host '已设为跟随系统代理（当前系统代理未开启，开启后将自动生效）。' -ForegroundColor Yellow
             }
         } elseif ($choice -eq '2') {
+            if (-not $systemProxy) {
+                Write-Host '未检测到开启的 Windows 系统代理，请先开启代理软件，或选 1 跟随系统 / 3 手动输入。' `
+                    -ForegroundColor Yellow
+            } else {
+                Set-ProxyConfig -Config $config -Mode 'manual' -Url $systemProxy -Enabled $true
+                Write-Host "已启用固定代理: $systemProxy" -ForegroundColor Green
+            }
+        } elseif ($choice -eq '3') {
             $example = if ($systemProxy) { $systemProxy } else { 'http://127.0.0.1:7890' }
             try {
                 $inputUrl = Read-Host "代理地址（如 $example，支持 http/https/socks5）"
@@ -2200,23 +2281,23 @@ function Configure-CliProxy {
                 if ([string]::IsNullOrWhiteSpace($noProxy)) {
                     $noProxy = $currentNoProxy
                 }
-                Set-ProxyConfig -Config $config -Url $url -NoProxy $noProxy.Trim()
-                Write-Host "已启用代理: $url" -ForegroundColor Green
+                Set-ProxyConfig -Config $config -Mode 'manual' -Url $url -NoProxy $noProxy.Trim() -Enabled $true
+                Write-Host "已启用固定代理: $url" -ForegroundColor Green
             }
-        } elseif ($choice -eq '3') {
-            Select-ProxyTools -Config $config
         } elseif ($choice -eq '4') {
+            Select-ProxyTools -Config $config
+        } elseif ($choice -eq '5') {
             $proxy = Get-ProxyConfig -Config $config
             $target = if ($proxy) { $proxy.Url } else { $systemProxy }
             if ($target) {
                 Test-ProxyConnection -Url $target
             } else {
-                Write-Host '尚未配置代理，也未检测到系统代理。' -ForegroundColor Yellow
+                Write-Host '尚未配置代理，且系统代理未开启。' -ForegroundColor Yellow
             }
-        } elseif ($choice -eq '5') {
+        } elseif ($choice -eq '6') {
             if ($config.proxy) {
                 Set-ProxyConfig -Config $config -Enabled $false
-                Write-Host '代理已停用（地址已保留，可随时重新启用）。' -ForegroundColor Green
+                Write-Host '代理已停用（原配置已保留，可随时重新启用）。' -ForegroundColor Green
             } else {
                 Write-Host '尚未配置代理。' -ForegroundColor Yellow
             }
