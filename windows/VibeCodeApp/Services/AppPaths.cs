@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using System.Reflection;
+using System.Security.Principal;
 
 namespace VibeCodeApp.Services;
 
@@ -19,6 +21,39 @@ public static class AppPaths
 
     public static string ExecutablePath =>
         Environment.ProcessPath ?? Path.Combine(AppContext.BaseDirectory, "VibeCode.exe");
+
+    public static bool IsRunningAsAdministrator()
+    {
+        try
+        {
+            using var identity = WindowsIdentity.GetCurrent();
+            var principal = new WindowsPrincipal(identity);
+            return principal.IsInRole(WindowsBuiltInRole.Administrator);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    public static bool TryStartElevatedInstance(string arguments = "--manage --wait-mutex")
+    {
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = ExecutablePath,
+                Arguments = arguments,
+                UseShellExecute = true,
+                Verb = "runas"
+            };
+            return Process.Start(psi) is not null;
+        }
+        catch
+        {
+            return false;
+        }
+    }
 
     public static string AppVersion
     {

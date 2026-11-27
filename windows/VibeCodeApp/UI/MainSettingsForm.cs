@@ -42,11 +42,13 @@ public sealed class MainSettingsForm : Form
     private readonly Button _moveUpBtn = new();
     private readonly Button _moveDownBtn = new();
     private readonly Button _refreshBtn = new();
+    private readonly Button _restartAdminBtn = new();
     private bool _suppressEvents;
     private bool _inhibitCheckOnDoubleClick;
 
     // Tab 2: 代理与终端
     private readonly ComboBox _terminalCombo = new();
+    private readonly CheckBox _runTerminalAsAdminCheck = new();
     private readonly Label _terminalDetectHintLabel = new();
     private List<DetectedTerminal> _detectedTerminals = new();
     private readonly CheckBox _proxyEnableCheck = new();
@@ -76,7 +78,7 @@ public sealed class MainSettingsForm : Form
 
     public MainSettingsForm()
     {
-        Text = "VibeCode 设置";
+        Text = AppPaths.IsRunningAsAdministrator() ? "VibeCode 设置 [管理员]" : "VibeCode 设置";
         StartPosition = FormStartPosition.CenterScreen;
         AutoScaleMode = AutoScaleMode.Dpi;
         ClientSize = new Size(820, 650);
@@ -387,14 +389,33 @@ public sealed class MainSettingsForm : Form
 
         leftBtns.Controls.AddRange([_addBtn, _editBtn, _deleteBtn, _moveUpBtn, _moveDownBtn]);
 
+        var rightBtns = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Right,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            Margin = new Padding(8, 0, 0, 0)
+        };
+
+        if (!AppPaths.IsRunningAsAdministrator())
+        {
+            _restartAdminBtn.Text = "管理员重启";
+            StyleAutoButton(_restartAdminBtn, 96);
+            _restartAdminBtn.Margin = new Padding(0, 0, 6, 0);
+            _restartAdminBtn.Click += (_, _) => HandleRestartAsAdmin();
+            rightBtns.Controls.Add(_restartAdminBtn);
+        }
+
         _refreshBtn.Text = "刷新检测";
         StyleAutoButton(_refreshBtn, 92);
-        _refreshBtn.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-        _refreshBtn.Margin = new Padding(8, 0, 0, 0);
+        _refreshBtn.Margin = new Padding(0);
         _refreshBtn.Click += (_, _) => ReloadAllFromDisk();
+        rightBtns.Controls.Add(_refreshBtn);
 
         btnBar.Controls.Add(leftBtns, 0, 0);
-        btnBar.Controls.Add(_refreshBtn, 1, 0);
+        btnBar.Controls.Add(rightBtns, 1, 0);
         root.Controls.Add(btnBar, 0, 3);
 
         // 5. 底部提示
@@ -472,11 +493,16 @@ public sealed class MainSettingsForm : Form
         _terminalCombo.Margin = new Padding(0, 2, 10, 2);
         _terminalCombo.SelectedIndexChanged += (_, _) => HandleTerminalChanged();
 
-        var redetectBtn = new Button { Text = "重新检测", Margin = new Padding(0, 1, 0, 1) };
+        var redetectBtn = new Button { Text = "重新检测", Margin = new Padding(0, 1, 14, 1) };
         StyleAutoButton(redetectBtn, 90);
         redetectBtn.Click += (_, _) => ReloadProxyAndTerminalTab();
 
-        termRow.Controls.AddRange([termLbl, _terminalCombo, redetectBtn]);
+        _runTerminalAsAdminCheck.Text = "以管理员身份启动终端 (UAC)";
+        _runTerminalAsAdminCheck.AutoSize = true;
+        _runTerminalAsAdminCheck.Margin = new Padding(0, 6, 0, 0);
+        _runTerminalAsAdminCheck.CheckedChanged += (_, _) => HandleRunTerminalAsAdminChanged();
+
+        termRow.Controls.AddRange([termLbl, _terminalCombo, redetectBtn, _runTerminalAsAdminCheck]);
 
         _terminalDetectHintLabel.AutoSize = true;
         _terminalDetectHintLabel.MaximumSize = new Size(720, 0);
@@ -1121,6 +1147,7 @@ public sealed class MainSettingsForm : Form
             var supportedList = string.Join(" / ", TerminalService.AllSupported.Select(s => s.ShortName));
             _terminalDetectHintLabel.Text =
                 $"已检测到 {_detectedTerminals.Count}/{TerminalService.AllSupported.Count} 款（支持自动检测: {supportedList}）";
+            _runTerminalAsAdminCheck.Checked = winCfg.RunTerminalAsAdmin;
 
             // 代理信息
             var proxy = toolsCfg.Proxy;
@@ -1560,6 +1587,22 @@ public sealed class MainSettingsForm : Form
         winCfg.Terminal = chosen.Spec.Id;
         winCfg.TerminalExePath = chosen.ExecutablePath;
         ConfigService.SaveWindowsConfig(winCfg);
+    }
+
+    private void HandleRunTerminalAsAdminChanged()
+    {
+        if (_suppressEvents) return;
+        var winCfg = ConfigService.LoadWindowsConfig();
+        winCfg.RunTerminalAsAdmin = _runTerminalAsAdminCheck.Checked;
+        ConfigService.SaveWindowsConfig(winCfg);
+    }
+
+    private void HandleRestartAsAdmin()
+    {
+        if (AppPaths.TryStartElevatedInstance("--manage --wait-mutex"))
+        {
+            Application.Exit();
+        }
     }
 
     private void UpdateProxyInputState()

@@ -61,7 +61,11 @@ public static class ToolLauncher
 
         try
         {
-            LaunchInTerminal(terminalId, exePath, toolKey, targetDir, toolsCfg, entry);
+            LaunchInTerminal(terminalId, exePath, toolKey, targetDir, toolsCfg, entry, winCfg.RunTerminalAsAdmin);
+        }
+        catch (System.ComponentModel.Win32Exception ex) when (ex.NativeErrorCode == 1223)
+        {
+            // 用户在 UAC 弹窗点击了“否/取消”，静默忽略
         }
         catch (Exception ex)
         {
@@ -125,7 +129,8 @@ public static class ToolLauncher
         string toolKey,
         string targetDir,
         ToolsConfig config,
-        ResolvedLaunch entry)
+        ResolvedLaunch entry,
+        bool runAsAdmin)
     {
         var dirName = Path.GetFileName(targetDir.TrimEnd('\\', '/'));
         if (string.IsNullOrEmpty(dirName)) dirName = targetDir;
@@ -139,12 +144,12 @@ public static class ToolLauncher
                 if (!string.IsNullOrWhiteSpace(pwsh))
                 {
                     var ps1 = WriteTempPowerShellRunner(toolKey, targetDir, windowTitle, config, entry);
-                    StartProcess(terminalExe, $"-d \"{targetDir}\" \"{pwsh}\" -NoLogo -NoExit -ExecutionPolicy Bypass -File \"{ps1}\"", targetDir);
+                    StartProcess(terminalExe, $"-d \"{targetDir}\" \"{pwsh}\" -NoLogo -NoExit -ExecutionPolicy Bypass -File \"{ps1}\"", targetDir, runAsAdmin);
                 }
                 else
                 {
                     var cmdScript = WriteTempCmdRunner(toolKey, targetDir, windowTitle, config, entry);
-                    StartProcess(terminalExe, $"-d \"{targetDir}\" cmd.exe /d /k \"{cmdScript}\"", targetDir);
+                    StartProcess(terminalExe, $"-d \"{targetDir}\" cmd.exe /d /k \"{cmdScript}\"", targetDir, runAsAdmin);
                 }
                 break;
             }
@@ -153,21 +158,21 @@ public static class ToolLauncher
             case "WindowsPowerShell":
             {
                 var ps1 = WriteTempPowerShellRunner(toolKey, targetDir, windowTitle, config, entry);
-                StartProcess(terminalExe, $"-NoLogo -NoExit -ExecutionPolicy Bypass -File \"{ps1}\"", targetDir);
+                StartProcess(terminalExe, $"-NoLogo -NoExit -ExecutionPolicy Bypass -File \"{ps1}\"", targetDir, runAsAdmin);
                 break;
             }
 
             case "WezTerm":
             {
                 var cmdScript = WriteTempCmdRunner(toolKey, targetDir, windowTitle, config, entry);
-                StartProcess(terminalExe, $"start --cwd \"{targetDir}\" -- cmd.exe /d /k \"{cmdScript}\"", targetDir);
+                StartProcess(terminalExe, $"start --cwd \"{targetDir}\" -- cmd.exe /d /k \"{cmdScript}\"", targetDir, runAsAdmin);
                 break;
             }
 
             case "Alacritty":
             {
                 var cmdScript = WriteTempCmdRunner(toolKey, targetDir, windowTitle, config, entry);
-                StartProcess(terminalExe, $"--working-directory \"{targetDir}\" -e cmd.exe /d /k \"{cmdScript}\"", targetDir);
+                StartProcess(terminalExe, $"--working-directory \"{targetDir}\" -e cmd.exe /d /k \"{cmdScript}\"", targetDir, runAsAdmin);
                 break;
             }
 
@@ -175,7 +180,7 @@ public static class ToolLauncher
             {
                 var shScript = WriteTempBashRunner(toolKey, targetDir, windowTitle, config, entry);
                 var shPosix = shScript.Replace('\\', '/');
-                StartProcess(terminalExe, $"--cd=\"{targetDir}\" -c \"bash '{shPosix}'\"", targetDir);
+                StartProcess(terminalExe, $"--cd=\"{targetDir}\" -c \"bash '{shPosix}'\"", targetDir, runAsAdmin);
                 break;
             }
 
@@ -190,14 +195,14 @@ public static class ToolLauncher
                 var jsonExec = System.Text.Json.JsonSerializer.Serialize($"cmd.exe /d /k \"{cmdScript}\"");
                 var yaml = $"---\nname: VibeCode Launch\nwindows:\n  - tabs:\n      - layout:\n          cwd: {jsonDir}\n          commands:\n            - exec: {jsonExec}\n";
                 File.WriteAllText(yamlPath, yaml, new UTF8Encoding(false));
-                StartProcess("warp://launch/vibecode-launch.yaml", string.Empty, targetDir);
+                StartProcess("warp://launch/vibecode-launch.yaml", string.Empty, targetDir, runAsAdmin: false);
                 break;
             }
 
             case "Tabby":
             {
                 var cmdScript = WriteTempCmdRunner(toolKey, targetDir, windowTitle, config, entry);
-                StartProcess(terminalExe, $"run cmd.exe /d /k \"{cmdScript}\"", targetDir);
+                StartProcess(terminalExe, $"run cmd.exe /d /k \"{cmdScript}\"", targetDir, runAsAdmin);
                 break;
             }
 
@@ -205,7 +210,7 @@ public static class ToolLauncher
             {
                 // Hyper 对外部传命令参数支持有限，通过新 CMD 窗口兜底确保目标 AI CLI 可靠启动
                 var cmdScript = WriteTempCmdRunner(toolKey, targetDir, windowTitle, config, entry);
-                StartProcess("cmd.exe", $"/d /k \"{cmdScript}\"", targetDir);
+                StartProcess("cmd.exe", $"/d /k \"{cmdScript}\"", targetDir, runAsAdmin);
                 break;
             }
 
@@ -213,13 +218,13 @@ public static class ToolLauncher
             default:
             {
                 var cmdScript = WriteTempCmdRunner(toolKey, targetDir, windowTitle, config, entry);
-                StartProcess("cmd.exe", $"/d /k \"{cmdScript}\"", targetDir);
+                StartProcess("cmd.exe", $"/d /k \"{cmdScript}\"", targetDir, runAsAdmin);
                 break;
             }
         }
     }
 
-    private static void StartProcess(string fileName, string arguments, string workingDir)
+    private static void StartProcess(string fileName, string arguments, string workingDir, bool runAsAdmin = false)
     {
         var psi = new ProcessStartInfo
         {
@@ -228,6 +233,10 @@ public static class ToolLauncher
             WorkingDirectory = workingDir,
             UseShellExecute = true
         };
+        if (runAsAdmin)
+        {
+            psi.Verb = "runas";
+        }
         Process.Start(psi);
     }
 

@@ -246,6 +246,24 @@ public sealed class TrayApplicationContext : ApplicationContext
         aboutItem.Click += (_, _) => _settingsForm.ShowAndSelectTab(MainTabIndex.About);
         _trayMenu.Items.Add(aboutItem);
 
+        if (AppPaths.IsRunningAsAdministrator())
+        {
+            var adminStatusItem = new ToolStripMenuItem("当前权限: 管理员") { Enabled = false };
+            _trayMenu.Items.Add(adminStatusItem);
+        }
+        else
+        {
+            var elevateItem = new ToolStripMenuItem("以管理员身份重启...");
+            elevateItem.Click += (_, _) =>
+            {
+                if (AppPaths.TryStartElevatedInstance("--manage --wait-mutex"))
+                {
+                    ExitApplication();
+                }
+            };
+            _trayMenu.Items.Add(elevateItem);
+        }
+
         var quitItem = new ToolStripMenuItem("退出 VibeCode");
         quitItem.Click += (_, _) => ExitApplication();
         _trayMenu.Items.Add(quitItem);

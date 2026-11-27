@@ -159,6 +159,9 @@ public sealed class WindowsAppConfig
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? TerminalExePath { get; set; }
 
+    [JsonPropertyName("runTerminalAsAdmin")]
+    public bool RunTerminalAsAdmin { get; set; }
+
     [JsonPropertyName("projectDir")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? ProjectDir { get; set; }

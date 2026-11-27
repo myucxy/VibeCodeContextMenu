@@ -53,8 +53,19 @@ internal static class Program
         }
 
         // 4. 单实例保护：若托盘实例已在运行，双击程序或带参数启动时直接唤醒设置窗口
-        using var mutex = new Mutex(initiallyOwned: true, SingleInstanceMutexName, out var createdNew);
-        if (!createdNew)
+        var waitForMutex = args.Any(a => string.Equals(a, "--wait-mutex", StringComparison.OrdinalIgnoreCase));
+        using var mutex = new Mutex(initiallyOwned: false, SingleInstanceMutexName);
+        var acquired = false;
+        try
+        {
+            acquired = mutex.WaitOne(waitForMutex ? TimeSpan.FromSeconds(4) : TimeSpan.Zero, exitContext: false);
+        }
+        catch (AbandonedMutexException)
+        {
+            acquired = true;
+        }
+
+        if (!acquired)
         {
             if (!isTraySilent)
             {
@@ -63,20 +74,27 @@ internal static class Program
             return;
         }
 
-        // 5. 首次启动自包含初始化（释放内置图标/默认配置、自动探测 AI CLI 与终端、写入右键菜单）
-        var isFirstRun = AppPaths.EnsureSupportDirectoryPrepared();
-        if (isFirstRun)
+        try
         {
-            ConfigService.InitializeFirstRunDefaults();
-        }
-        else
-        {
-            // 每次启动同步一次右键菜单，确保 exe 路径搬迁后注册表指向最新路径
-            RegistryMenuService.SyncContextMenu(
-                ConfigService.LoadToolsConfig(),
-                ConfigService.LoadWindowsConfig());
-        }
+            // 5. 首次启动自包含初始化（释放内置图标/默认配置、自动探测 AI CLI 与终端、写入右键菜单）
+            var isFirstRun = AppPaths.EnsureSupportDirectoryPrepared();
+            if (isFirstRun)
+            {
+                ConfigService.InitializeFirstRunDefaults();
+            }
+            else
+            {
+                // 每次启动同步一次右键菜单，确保 exe 路径搬迁后注册表指向最新路径
+                RegistryMenuService.SyncContextMenu(
+                    ConfigService.LoadToolsConfig(),
+                    ConfigService.LoadWindowsConfig());
+            }
 
-        Application.Run(new TrayApplicationContext(requestedTab));
+            Application.Run(new TrayApplicationContext(requestedTab));
+        }
+        finally
+        {
+            try { mutex.ReleaseMutex(); } catch { }
+        }
     }
 }
