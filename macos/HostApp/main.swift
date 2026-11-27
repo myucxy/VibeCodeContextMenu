@@ -18,8 +18,32 @@ private struct HostToolsConfig: Codable {
 
 private struct ProxySettings: Codable {
     var enabled: Bool
+    var mode: String?
     var url: String
     var noProxy: String?
+}
+
+private struct GitHubReleaseAsset: Codable {
+    var name: String
+    var browser_download_url: String
+    var size: Int64
+}
+
+private struct GitHubReleaseInfo: Codable {
+    var tag_name: String
+    var name: String?
+    var body: String?
+    var html_url: String
+    var assets: [GitHubReleaseAsset]?
+}
+
+private struct UpdateCheckResult {
+    var hasUpdate: Bool
+    var currentVersion: String
+    var latestVersion: String
+    var release: GitHubReleaseInfo
+    var installerAsset: GitHubReleaseAsset?
+    var sha256Asset: GitHubReleaseAsset?
 }
 
 private struct HostToolEntry: Codable {
@@ -698,6 +722,7 @@ private final class MainSettingsWindowController: NSWindowController, NSTableVie
     private var detectedTerminals: [DetectedTerminal] = []
     private let extStatusValueLabel = NSTextField(labelWithString: "")
     private let proxyEnableSwitch = NSSwitch()
+    private let proxyFollowSystemCheck = NSButton(checkboxWithTitle: "跟随 macOS 系统代理（开代理生效，关代理直连）", target: nil, action: nil)
     private let sysProxyHintLabel = NSTextField(labelWithString: "")
     private let fillSysProxyButton = NSButton(title: "填入系统代理", target: nil, action: nil)
     private let proxyUrlField = NSTextField(string: "")
@@ -707,6 +732,19 @@ private final class MainSettingsWindowController: NSWindowController, NSTableVie
     private let proxyFeedbackLabel = NSTextField(labelWithString: "")
     private let proxyTestOutputView = NSTextView()
     private var detectedSystemProxy: String?
+
+    // Tab 3: 关于与更新检测
+    private let updateBannerBox = NSBox()
+    private let updateBannerTitleLabel = NSTextField(labelWithString: "")
+    private let updateBannerDetailLabel = NSTextField(labelWithString: "")
+    private let bannerOnlineUpdateBtn = NSButton(title: "在线更新", target: nil, action: nil)
+    private let bannerManualDownloadBtn = NSButton(title: "手动下载 (网页)", target: nil, action: nil)
+    private let bannerNotesBtn = NSButton(title: "更新日志", target: nil, action: nil)
+    private let checkUpdateButton = NSButton(title: "检查更新", target: nil, action: nil)
+    private let updateStatusLabel = NSTextField(labelWithString: "点击「检查更新」检测 GitHub Releases 新版本")
+    private var latestUpdateResult: UpdateCheckResult?
+    private var isCheckingUpdate = false
+    private var isDownloadingUpdate = false
 
     init(appDelegate: VibeCodeAppDelegate) {
         self.appDelegate = appDelegate
@@ -1015,6 +1053,10 @@ private final class MainSettingsWindowController: NSWindowController, NSTableVie
         proxyEnableSwitch.action = #selector(handleProxySwitchToggled)
         proxyEnableSwitch.translatesAutoresizingMaskIntoConstraints = false
 
+        proxyFollowSystemCheck.target = self
+        proxyFollowSystemCheck.action = #selector(handleProxyFollowSystemToggled)
+        proxyFollowSystemCheck.translatesAutoresizingMaskIntoConstraints = false
+
         sysProxyHintLabel.font = NSFont.systemFont(ofSize: 12)
         sysProxyHintLabel.textColor = .secondaryLabelColor
         sysProxyHintLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -1074,7 +1116,7 @@ private final class MainSettingsWindowController: NSWindowController, NSTableVie
         outputScroll.borderType = .bezelBorder
         outputScroll.translatesAutoresizingMaskIntoConstraints = false
 
-        for v in [proxyHeader, proxyEnableSwitch, sysProxyHintLabel, fillSysProxyButton, urlLabel, proxyUrlField, noProxyLabel, noProxyField, saveProxyButton, testProxyButton, proxyFeedbackLabel, directTipLabel, outputScroll] {
+        for v in [proxyHeader, proxyEnableSwitch, proxyFollowSystemCheck, sysProxyHintLabel, fillSysProxyButton, urlLabel, proxyUrlField, noProxyLabel, noProxyField, saveProxyButton, testProxyButton, proxyFeedbackLabel, directTipLabel, outputScroll] {
             proxyBox.addSubview(v)
         }
 
@@ -1124,7 +1166,10 @@ private final class MainSettingsWindowController: NSWindowController, NSTableVie
             proxyEnableSwitch.centerYAnchor.constraint(equalTo: proxyHeader.centerYAnchor),
             proxyEnableSwitch.trailingAnchor.constraint(equalTo: proxyBox.trailingAnchor, constant: -14),
 
-            sysProxyHintLabel.topAnchor.constraint(equalTo: proxyHeader.bottomAnchor, constant: 10),
+            proxyFollowSystemCheck.topAnchor.constraint(equalTo: proxyHeader.bottomAnchor, constant: 8),
+            proxyFollowSystemCheck.leadingAnchor.constraint(equalTo: proxyBox.leadingAnchor, constant: 14),
+
+            sysProxyHintLabel.topAnchor.constraint(equalTo: proxyFollowSystemCheck.bottomAnchor, constant: 8),
             sysProxyHintLabel.leadingAnchor.constraint(equalTo: proxyBox.leadingAnchor, constant: 14),
 
             fillSysProxyButton.centerYAnchor.constraint(equalTo: sysProxyHintLabel.centerYAnchor),
@@ -1224,6 +1269,76 @@ private final class MainSettingsWindowController: NSWindowController, NSTableVie
         openGitHubBtn.bezelStyle = .rounded
         openGitHubBtn.translatesAutoresizingMaskIntoConstraints = false
 
+        checkUpdateButton.bezelStyle = .rounded
+        checkUpdateButton.target = self
+        checkUpdateButton.action = #selector(handleCheckUpdate)
+        checkUpdateButton.translatesAutoresizingMaskIntoConstraints = false
+
+        updateStatusLabel.font = NSFont.systemFont(ofSize: 12)
+        updateStatusLabel.textColor = .secondaryLabelColor
+        updateStatusLabel.alignment = .center
+        updateStatusLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        // 检测到新版本时直接显示的高亮更新卡片（在线更新 / 手动下载 / 更新日志）
+        updateBannerBox.boxType = .custom
+        updateBannerBox.cornerRadius = 8
+        updateBannerBox.borderWidth = 1
+        updateBannerBox.borderColor = NSColor.systemBlue.withAlphaComponent(0.35)
+        updateBannerBox.fillColor = NSColor.systemBlue.withAlphaComponent(0.08)
+        updateBannerBox.isHidden = true
+        updateBannerBox.translatesAutoresizingMaskIntoConstraints = false
+
+        updateBannerTitleLabel.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
+        updateBannerTitleLabel.textColor = .systemBlue
+        updateBannerTitleLabel.alignment = .center
+        updateBannerTitleLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        updateBannerDetailLabel.font = NSFont.systemFont(ofSize: 11.5)
+        updateBannerDetailLabel.textColor = .secondaryLabelColor
+        updateBannerDetailLabel.alignment = .center
+        updateBannerDetailLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        bannerOnlineUpdateBtn.bezelStyle = .rounded
+        bannerOnlineUpdateBtn.bezelColor = .controlAccentColor
+        bannerOnlineUpdateBtn.target = self
+        bannerOnlineUpdateBtn.action = #selector(handleBannerOnlineUpdate)
+        bannerOnlineUpdateBtn.translatesAutoresizingMaskIntoConstraints = false
+
+        bannerManualDownloadBtn.bezelStyle = .rounded
+        bannerManualDownloadBtn.target = self
+        bannerManualDownloadBtn.action = #selector(handleBannerManualDownload)
+        bannerManualDownloadBtn.translatesAutoresizingMaskIntoConstraints = false
+
+        bannerNotesBtn.bezelStyle = .rounded
+        bannerNotesBtn.target = self
+        bannerNotesBtn.action = #selector(handleBannerShowNotes)
+        bannerNotesBtn.translatesAutoresizingMaskIntoConstraints = false
+
+        let bannerBtnStack = NSStackView(views: [bannerOnlineUpdateBtn, bannerManualDownloadBtn, bannerNotesBtn])
+        bannerBtnStack.orientation = .horizontal
+        bannerBtnStack.spacing = 8
+        bannerBtnStack.translatesAutoresizingMaskIntoConstraints = false
+
+        updateBannerBox.addSubview(updateBannerTitleLabel)
+        updateBannerBox.addSubview(updateBannerDetailLabel)
+        updateBannerBox.addSubview(bannerBtnStack)
+
+        NSLayoutConstraint.activate([
+            updateBannerTitleLabel.topAnchor.constraint(equalTo: updateBannerBox.topAnchor, constant: 10),
+            updateBannerTitleLabel.centerXAnchor.constraint(equalTo: updateBannerBox.centerXAnchor),
+            updateBannerTitleLabel.leadingAnchor.constraint(greaterThanOrEqualTo: updateBannerBox.leadingAnchor, constant: 14),
+            updateBannerTitleLabel.trailingAnchor.constraint(lessThanOrEqualTo: updateBannerBox.trailingAnchor, constant: -14),
+
+            updateBannerDetailLabel.topAnchor.constraint(equalTo: updateBannerTitleLabel.bottomAnchor, constant: 4),
+            updateBannerDetailLabel.centerXAnchor.constraint(equalTo: updateBannerBox.centerXAnchor),
+            updateBannerDetailLabel.leadingAnchor.constraint(greaterThanOrEqualTo: updateBannerBox.leadingAnchor, constant: 14),
+            updateBannerDetailLabel.trailingAnchor.constraint(lessThanOrEqualTo: updateBannerBox.trailingAnchor, constant: -14),
+
+            bannerBtnStack.topAnchor.constraint(equalTo: updateBannerDetailLabel.bottomAnchor, constant: 10),
+            bannerBtnStack.centerXAnchor.constraint(equalTo: updateBannerBox.centerXAnchor),
+            bannerBtnStack.bottomAnchor.constraint(equalTo: updateBannerBox.bottomAnchor, constant: -10),
+        ])
+
         let openConfigDirBtn = NSButton(title: "打开配置目录", target: self, action: #selector(handleOpenConfigDir))
         openConfigDirBtn.bezelStyle = .rounded
         openConfigDirBtn.translatesAutoresizingMaskIntoConstraints = false
@@ -1232,7 +1347,7 @@ private final class MainSettingsWindowController: NSWindowController, NSTableVie
         editToolsJsonBtn.bezelStyle = .rounded
         editToolsJsonBtn.translatesAutoresizingMaskIntoConstraints = false
 
-        for v in [iconView, appTitle, versionLabel, descLabel, sep, authorLabel, githubLinkBtn, openGitHubBtn, openConfigDirBtn, editToolsJsonBtn] {
+        for v in [iconView, appTitle, versionLabel, descLabel, sep, authorLabel, githubLinkBtn, updateBannerBox, checkUpdateButton, openGitHubBtn, updateStatusLabel, openConfigDirBtn, editToolsJsonBtn] {
             card.addSubview(v)
         }
 
@@ -1242,39 +1357,53 @@ private final class MainSettingsWindowController: NSWindowController, NSTableVie
             card.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -18),
             card.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -18),
 
-            iconView.topAnchor.constraint(equalTo: card.topAnchor, constant: 44),
+            iconView.topAnchor.constraint(equalTo: card.topAnchor, constant: 28),
             iconView.centerXAnchor.constraint(equalTo: card.centerXAnchor),
-            iconView.widthAnchor.constraint(equalToConstant: 72),
-            iconView.heightAnchor.constraint(equalToConstant: 72),
+            iconView.widthAnchor.constraint(equalToConstant: 64),
+            iconView.heightAnchor.constraint(equalToConstant: 64),
 
-            appTitle.topAnchor.constraint(equalTo: iconView.bottomAnchor, constant: 14),
+            appTitle.topAnchor.constraint(equalTo: iconView.bottomAnchor, constant: 10),
             appTitle.centerXAnchor.constraint(equalTo: card.centerXAnchor),
 
-            versionLabel.topAnchor.constraint(equalTo: appTitle.bottomAnchor, constant: 6),
+            versionLabel.topAnchor.constraint(equalTo: appTitle.bottomAnchor, constant: 4),
             versionLabel.centerXAnchor.constraint(equalTo: card.centerXAnchor),
 
-            descLabel.topAnchor.constraint(equalTo: versionLabel.bottomAnchor, constant: 10),
+            descLabel.topAnchor.constraint(equalTo: versionLabel.bottomAnchor, constant: 6),
             descLabel.centerXAnchor.constraint(equalTo: card.centerXAnchor),
 
-            sep.topAnchor.constraint(equalTo: descLabel.bottomAnchor, constant: 24),
+            sep.topAnchor.constraint(equalTo: descLabel.bottomAnchor, constant: 16),
             sep.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 60),
             sep.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -60),
 
-            authorLabel.topAnchor.constraint(equalTo: sep.bottomAnchor, constant: 22),
+            authorLabel.topAnchor.constraint(equalTo: sep.bottomAnchor, constant: 14),
             authorLabel.centerXAnchor.constraint(equalTo: card.centerXAnchor),
 
-            githubLinkBtn.topAnchor.constraint(equalTo: authorLabel.bottomAnchor, constant: 10),
+            githubLinkBtn.topAnchor.constraint(equalTo: authorLabel.bottomAnchor, constant: 6),
             githubLinkBtn.centerXAnchor.constraint(equalTo: card.centerXAnchor),
 
-            openGitHubBtn.topAnchor.constraint(equalTo: githubLinkBtn.bottomAnchor, constant: 24),
-            openGitHubBtn.centerXAnchor.constraint(equalTo: card.centerXAnchor),
+            updateBannerBox.topAnchor.constraint(equalTo: githubLinkBtn.bottomAnchor, constant: 14),
+            updateBannerBox.centerXAnchor.constraint(equalTo: card.centerXAnchor),
+            updateBannerBox.widthAnchor.constraint(greaterThanOrEqualToConstant: 380),
 
-            openConfigDirBtn.topAnchor.constraint(equalTo: openGitHubBtn.bottomAnchor, constant: 18),
+            checkUpdateButton.topAnchor.constraint(equalTo: updateBannerBox.bottomAnchor, constant: 14),
+            checkUpdateButton.trailingAnchor.constraint(equalTo: card.centerXAnchor, constant: -6),
+
+            openGitHubBtn.centerYAnchor.constraint(equalTo: checkUpdateButton.centerYAnchor),
+            openGitHubBtn.leadingAnchor.constraint(equalTo: card.centerXAnchor, constant: 6),
+
+            updateStatusLabel.topAnchor.constraint(equalTo: checkUpdateButton.bottomAnchor, constant: 8),
+            updateStatusLabel.centerXAnchor.constraint(equalTo: card.centerXAnchor),
+
+            openConfigDirBtn.topAnchor.constraint(equalTo: updateStatusLabel.bottomAnchor, constant: 14),
             openConfigDirBtn.trailingAnchor.constraint(equalTo: card.centerXAnchor, constant: -6),
 
             editToolsJsonBtn.centerYAnchor.constraint(equalTo: openConfigDirBtn.centerYAnchor),
             editToolsJsonBtn.leadingAnchor.constraint(equalTo: card.centerXAnchor, constant: 6),
         ])
+
+        if let cached = appDelegate.cachedUpdateResult {
+            applyUpdateCheckResult(cached)
+        }
 
         return root
     }
@@ -1408,6 +1537,8 @@ private final class MainSettingsWindowController: NSWindowController, NSTableVie
         // 代理配置
         let proxy = toolsCfg?.proxy
         proxyEnableSwitch.state = (proxy?.enabled == true) ? .on : .off
+        let isSystemMode = (proxy?.mode?.lowercased() == "system")
+        proxyFollowSystemCheck.state = isSystemMode ? .on : .off
         proxyUrlField.stringValue = proxy?.url ?? ""
         noProxyField.stringValue = (proxy?.noProxy?.isEmpty == false) ? (proxy?.noProxy ?? kDefaultNoProxy) : kDefaultNoProxy
 
@@ -1415,12 +1546,11 @@ private final class MainSettingsWindowController: NSWindowController, NSTableVie
         if let sys = detectedSystemProxy {
             sysProxyHintLabel.stringValue = "检测到 macOS 系统代理: \(sys)"
             sysProxyHintLabel.textColor = .secondaryLabelColor
-            fillSysProxyButton.isEnabled = true
         } else {
-            sysProxyHintLabel.stringValue = "未检测到 macOS 系统代理（可手动输入代理地址）"
+            sysProxyHintLabel.stringValue = "未检测到 macOS 系统代理（可勾选「跟随系统」或手动填写地址）"
             sysProxyHintLabel.textColor = .tertiaryLabelColor
-            fillSysProxyButton.isEnabled = false
         }
+        updateProxyInputState()
     }
 
     private func updateMasterStatusText(menuOn: Bool) {
@@ -1677,6 +1807,12 @@ private final class MainSettingsWindowController: NSWindowController, NSTableVie
         appDelegate.openExtensionSystemSettings()
     }
 
+    private func updateProxyInputState() {
+        let followSystem = (proxyFollowSystemCheck.state == .on)
+        proxyUrlField.isEnabled = !followSystem
+        fillSysProxyButton.isEnabled = !followSystem && (detectedSystemProxy != nil)
+    }
+
     @objc private func handleFillSystemProxy() {
         detectedSystemProxy = appDelegate.detectMacOSSystemProxy()
         guard let sys = detectedSystemProxy else {
@@ -1684,15 +1820,23 @@ private final class MainSettingsWindowController: NSWindowController, NSTableVie
             proxyFeedbackLabel.textColor = .systemOrange
             return
         }
+        proxyFollowSystemCheck.state = .off
         proxyUrlField.stringValue = sys
         if noProxyField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             noProxyField.stringValue = kDefaultNoProxy
         }
         proxyEnableSwitch.state = .on
+        updateProxyInputState()
         saveProxyFields()
     }
 
     @objc private func handleProxySwitchToggled() {
+        updateProxyInputState()
+        saveProxyFields()
+    }
+
+    @objc private func handleProxyFollowSystemToggled() {
+        updateProxyInputState()
         saveProxyFields()
     }
 
@@ -1716,36 +1860,55 @@ private final class MainSettingsWindowController: NSWindowController, NSTableVie
 
     private func saveProxyFields() {
         let enabled = (proxyEnableSwitch.state == .on)
+        let followSystem = (proxyFollowSystemCheck.state == .on)
         let rawUrl = proxyUrlField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         let noProxyRaw = noProxyField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         let finalNoProxy = noProxyRaw.isEmpty ? kDefaultNoProxy : noProxyRaw
 
         var finalUrl = ""
         if !rawUrl.isEmpty {
-            guard let normalized = normalizeProxyURL(rawUrl) else {
+            if let normalized = normalizeProxyURL(rawUrl) {
+                finalUrl = normalized
+                proxyUrlField.stringValue = normalized
+            } else if !followSystem {
                 proxyFeedbackLabel.stringValue = "代理地址格式无效（示例: http://127.0.0.1:7897）"
                 proxyFeedbackLabel.textColor = .systemRed
                 return
             }
-            finalUrl = normalized
-            proxyUrlField.stringValue = normalized
-        } else if enabled {
-            proxyFeedbackLabel.stringValue = "请先填写代理地址或点击「填入系统代理」"
+        } else if enabled && !followSystem {
+            proxyFeedbackLabel.stringValue = "请先填写代理地址、点击「填入系统代理」或勾选「跟随系统」"
             proxyFeedbackLabel.textColor = .systemOrange
             proxyEnableSwitch.state = .off
             return
         }
 
         noProxyField.stringValue = finalNoProxy
-        appDelegate.updateProxyInToolsJson(enabled: enabled, url: finalUrl, noProxy: finalNoProxy)
-        proxyFeedbackLabel.stringValue = enabled ? "已启用代理: \(finalUrl)" : "已停用 CLI 代理"
-        proxyFeedbackLabel.textColor = enabled ? .systemGreen : .secondaryLabelColor
+        let mode = followSystem ? "system" : "manual"
+        appDelegate.updateProxyInToolsJson(enabled: enabled, mode: mode, url: finalUrl, noProxy: finalNoProxy)
+        if !enabled {
+            proxyFeedbackLabel.stringValue = "已停用 CLI 代理"
+            proxyFeedbackLabel.textColor = .secondaryLabelColor
+        } else if followSystem {
+            detectedSystemProxy = appDelegate.detectMacOSSystemProxy()
+            if let sys = detectedSystemProxy {
+                proxyFeedbackLabel.stringValue = "已启用（跟随系统: \(sys)）"
+            } else {
+                proxyFeedbackLabel.stringValue = "已启用（跟随系统，当前未开启代理将直连）"
+            }
+            proxyFeedbackLabel.textColor = .systemGreen
+        } else {
+            proxyFeedbackLabel.stringValue = "已启用固定代理: \(finalUrl)"
+            proxyFeedbackLabel.textColor = .systemGreen
+        }
     }
 
     @objc private func handleTestProxy() {
+        let followSystem = (proxyFollowSystemCheck.state == .on)
         let rawUrl = proxyUrlField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         let testUrl: String?
-        if !rawUrl.isEmpty {
+        if followSystem {
+            testUrl = appDelegate.detectMacOSSystemProxy()
+        } else if !rawUrl.isEmpty {
             testUrl = normalizeProxyURL(rawUrl)
             if testUrl == nil {
                 proxyTestOutputView.string = "[错误] 代理地址格式无效: \(rawUrl)\n支持 http://、https://、socks5://"
@@ -1815,7 +1978,151 @@ private final class MainSettingsWindowController: NSWindowController, NSTableVie
         }
     }
 
-    // MARK: - Tab 3 交互动作（关于）
+    // MARK: - Tab 3 交互动作（关于与更新）
+
+    fileprivate func applyUpdateCheckResult(_ result: UpdateCheckResult) {
+        latestUpdateResult = result
+        if result.hasUpdate {
+            updateBannerTitleLabel.stringValue = "发现新版本 v\(result.latestVersion)（当前 v\(result.currentVersion)）"
+            if let asset = result.installerAsset {
+                let mb = Double(asset.size) / (1024.0 * 1024.0)
+                updateBannerDetailLabel.stringValue = String(format: "匹配安装包: %@ (%.1f MB)", asset.name, mb)
+                bannerOnlineUpdateBtn.isHidden = false
+            } else {
+                updateBannerDetailLabel.stringValue = "请点击「手动下载」前往 GitHub Releases 页面下载"
+                bannerOnlineUpdateBtn.isHidden = true
+            }
+            updateBannerBox.isHidden = false
+            updateStatusLabel.isHidden = true
+        } else {
+            updateBannerBox.isHidden = true
+            updateStatusLabel.isHidden = false
+            updateStatusLabel.stringValue = "当前已是最新版本 (v\(result.currentVersion))"
+            updateStatusLabel.textColor = .systemGreen
+        }
+    }
+
+    @objc private func handleCheckUpdate() {
+        triggerManualUpdateCheck()
+    }
+
+    fileprivate func triggerManualUpdateCheck() {
+        if isCheckingUpdate { return }
+        isCheckingUpdate = true
+        checkUpdateButton.isEnabled = false
+        updateStatusLabel.isHidden = false
+        updateStatusLabel.stringValue = "正在连接 GitHub 检查最新版本..."
+        updateStatusLabel.textColor = .secondaryLabelColor
+
+        appDelegate.checkForUpdate { [weak self] outcome in
+            guard let self = self else { return }
+            self.isCheckingUpdate = false
+            self.checkUpdateButton.isEnabled = true
+
+            switch outcome {
+            case .success(let result):
+                self.applyUpdateCheckResult(result)
+                if result.hasUpdate {
+                    self.presentUpdateAlert(result: result)
+                } else {
+                    let alert = NSAlert()
+                    alert.messageText = "当前已是最新版本"
+                    alert.informativeText = "VibeCode macOS 原生版当前版本为 v\(result.currentVersion)，暂无可用更新。"
+                    alert.alertStyle = .informational
+                    alert.runModal()
+                }
+            case .failure(let error):
+                self.updateStatusLabel.stringValue = "检查更新失败: \(error.localizedDescription)"
+                self.updateStatusLabel.textColor = .systemRed
+                let alert = NSAlert()
+                alert.messageText = "检查更新失败"
+                alert.informativeText = "\(error.localizedDescription)\n\n是否直接打开 GitHub Releases 网页查看？"
+                alert.addButton(withTitle: "打开网页")
+                alert.addButton(withTitle: "取消")
+                if alert.runModal() == .alertFirstButtonReturn {
+                    if let url = URL(string: "\(kGitHubURLString)/releases/latest") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+            }
+        }
+    }
+
+    @objc private func handleBannerOnlineUpdate() {
+        guard let result = latestUpdateResult, result.hasUpdate else { return }
+        startOnlineUpdateDownload(result: result)
+    }
+
+    @objc private func handleBannerManualDownload() {
+        let urlStr = latestUpdateResult?.release.html_url ?? "\(kGitHubURLString)/releases/latest"
+        if let url = URL(string: urlStr) {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    @objc private func handleBannerShowNotes() {
+        guard let result = latestUpdateResult, result.hasUpdate else { return }
+        presentUpdateAlert(result: result)
+    }
+
+    fileprivate func presentUpdateAlert(result: UpdateCheckResult) {
+        let alert = NSAlert()
+        alert.messageText = "发现新版本 v\(result.latestVersion)（当前 v\(result.currentVersion)）"
+        let notes = (result.release.body ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        alert.informativeText = notes.isEmpty ? "是否立即下载最新版本，或打开网页手动下载？" : notes
+        alert.alertStyle = .informational
+        if result.installerAsset != nil {
+            alert.addButton(withTitle: "在线更新")
+        }
+        alert.addButton(withTitle: "手动下载 (网页)")
+        alert.addButton(withTitle: "稍后提醒")
+
+        let resp = alert.runModal()
+        if result.installerAsset != nil {
+            if resp == .alertFirstButtonReturn {
+                startOnlineUpdateDownload(result: result)
+            } else if resp == .alertSecondButtonReturn {
+                if let url = URL(string: result.release.html_url) {
+                    NSWorkspace.shared.open(url)
+                }
+            }
+        } else if resp == .alertFirstButtonReturn {
+            if let url = URL(string: result.release.html_url) {
+                NSWorkspace.shared.open(url)
+            }
+        }
+    }
+
+    fileprivate func startOnlineUpdateDownload(result: UpdateCheckResult) {
+        guard !isDownloadingUpdate, let asset = result.installerAsset else { return }
+        isDownloadingUpdate = true
+        bannerOnlineUpdateBtn.isEnabled = false
+        updateBannerDetailLabel.stringValue = "正在下载 \(asset.name) 并校验 SHA-256..."
+
+        appDelegate.downloadAndVerifyUpdate(asset: asset, sha256Asset: result.sha256Asset) { [weak self] outcome in
+            guard let self = self else { return }
+            self.isDownloadingUpdate = false
+            self.bannerOnlineUpdateBtn.isEnabled = true
+
+            switch outcome {
+            case .success(let fileURL):
+                self.updateBannerDetailLabel.stringValue = "校验通过，已打开 \(fileURL.lastPathComponent)"
+                NSWorkspace.shared.open(fileURL)
+            case .failure(let error):
+                self.updateBannerDetailLabel.stringValue = "下载失败: \(error.localizedDescription)"
+                let alert = NSAlert()
+                alert.messageText = "在线下载失败"
+                alert.informativeText = "\(error.localizedDescription)\n\n是否改为打开网页手动下载？"
+                alert.addButton(withTitle: "打开网页")
+                alert.addButton(withTitle: "取消")
+                if alert.runModal() == .alertFirstButtonReturn {
+                    if let url = URL(string: result.release.html_url) {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+            }
+        }
+    }
 
     @objc private func handleOpenGitHub() {
         appDelegate.openGitHubRepository()
@@ -1989,10 +2296,12 @@ final class VibeCodeAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
     private var launcherURL: URL { supportDir.appendingPathComponent("launch-vibecode-tool.sh") }
 
     private var launchedViaURL = false
+    fileprivate var cachedUpdateResult: UpdateCheckResult?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let isFirstRun = ensureSupportDirectoryPrepared()
         setupStatusBarIfNeeded()
+        startBackgroundUpdateCheck()
         if isFirstRun {
             ensureFinderExtensionEnabled()
             // 全新机器首次打开 .app 时自动展示设置窗口（通过 vibecode:// 唤起时除外）
@@ -2196,17 +2505,30 @@ final class VibeCodeAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
         terminalItem.submenu = terminalSub
         menu.addItem(terminalItem)
 
-        // 4. CLI 代理快捷切换
+        // 4. CLI 代理快捷切换（支持跟随系统代理与固定地址）
+        let sysProxy = detectMacOSSystemProxy()
         let proxyStatusText: String
-        if let proxy = toolsCfg?.proxy, proxy.enabled, !proxy.url.isEmpty {
-            proxyStatusText = "CLI 代理: 已启用 (\(proxy.url))"
+        if let proxy = toolsCfg?.proxy, proxy.enabled {
+            if proxy.mode?.lowercased() == "system" {
+                proxyStatusText = sysProxy != nil ? "CLI 代理: 跟随系统 (\(sysProxy!))" : "CLI 代理: 跟随系统 (当前直连)"
+            } else if !proxy.url.isEmpty {
+                proxyStatusText = "CLI 代理: 已启用 (\(proxy.url))"
+            } else {
+                proxyStatusText = "CLI 代理: 未启用"
+            }
         } else {
             proxyStatusText = "CLI 代理: 未启用"
         }
         let proxyItem = NSMenuItem(title: proxyStatusText, action: nil, keyEquivalent: "")
         let proxySub = NSMenu()
-        let sysProxy = detectMacOSSystemProxy()
-        let useSysTitle = sysProxy != nil ? "启用 macOS 系统代理 (\(sysProxy!))" : "未检测到 macOS 系统代理"
+
+        let followSysTitle = sysProxy != nil ? "跟随 macOS 系统代理 (\(sysProxy!))" : "跟随 macOS 系统代理 (当前未开启)"
+        let followSysItem = NSMenuItem(title: followSysTitle, action: #selector(handleFollowSystemProxy), keyEquivalent: "")
+        followSysItem.target = self
+        followSysItem.state = (toolsCfg?.proxy?.enabled == true && toolsCfg?.proxy?.mode?.lowercased() == "system") ? .on : .off
+        proxySub.addItem(followSysItem)
+
+        let useSysTitle = sysProxy != nil ? "固定使用当前系统代理 (\(sysProxy!))" : "未检测到 macOS 系统代理"
         let useSysItem = NSMenuItem(title: useSysTitle, action: #selector(handleEnableSystemProxy(_:)), keyEquivalent: "")
         useSysItem.target = self
         useSysItem.representedObject = sysProxy
@@ -2240,6 +2562,29 @@ final class VibeCodeAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
         menu.addItem(sysExtItem)
 
         menu.addItem(.separator())
+
+        if let found = cachedUpdateResult, found.hasUpdate {
+            let updateRoot = NSMenuItem(title: "发现新版本 (v\(found.latestVersion))", action: nil, keyEquivalent: "")
+            let updateSub = NSMenu()
+            if found.installerAsset != nil {
+                let onlineItem = NSMenuItem(title: "在线更新（下载并打开安装包）", action: #selector(handleMenuOnlineUpdate), keyEquivalent: "")
+                onlineItem.target = self
+                updateSub.addItem(onlineItem)
+            }
+            let manualItem = NSMenuItem(title: "手动下载（打开网页）", action: #selector(handleMenuManualDownload), keyEquivalent: "")
+            manualItem.target = self
+            updateSub.addItem(manualItem)
+            updateSub.addItem(.separator())
+            let notesItem = NSMenuItem(title: "查看更新日志...", action: #selector(handleMenuShowUpdateNotes), keyEquivalent: "")
+            notesItem.target = self
+            updateSub.addItem(notesItem)
+            updateRoot.submenu = updateSub
+            menu.addItem(updateRoot)
+        } else {
+            let checkUpdateItem = NSMenuItem(title: "检查更新...", action: #selector(handleMenuCheckUpdate), keyEquivalent: "")
+            checkUpdateItem.target = self
+            menu.addItem(checkUpdateItem)
+        }
 
         let aboutItem = NSMenuItem(title: "关于 VibeCode", action: #selector(handleAbout), keyEquivalent: "")
         aboutItem.target = self
@@ -2302,11 +2647,242 @@ final class VibeCodeAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
         }
     }
 
-    @objc private func handleEnableSystemProxy(_ sender: NSMenuItem) {
-        guard let proxyURL = sender.representedObject as? String, !proxyURL.isEmpty else { return }
-        updateProxyInToolsJson(enabled: true, url: proxyURL, noProxy: nil)
+    @objc private func handleFollowSystemProxy() {
+        updateProxyInToolsJson(enabled: true, mode: "system", url: nil, noProxy: nil)
         if settingsController?.window?.isVisible == true {
             settingsController?.reloadAllFromDisk()
+        }
+    }
+
+    @objc private func handleEnableSystemProxy(_ sender: NSMenuItem) {
+        guard let proxyURL = sender.representedObject as? String, !proxyURL.isEmpty else { return }
+        updateProxyInToolsJson(enabled: true, mode: "manual", url: proxyURL, noProxy: nil)
+        if settingsController?.window?.isVisible == true {
+            settingsController?.reloadAllFromDisk()
+        }
+    }
+
+    @objc private func handleMenuCheckUpdate() {
+        openSettingsWindow(tab: .about)
+        settingsController?.triggerManualUpdateCheck()
+    }
+
+    @objc private func handleMenuOnlineUpdate() {
+        guard let found = cachedUpdateResult, found.hasUpdate else { return }
+        openSettingsWindow(tab: .about)
+        settingsController?.startOnlineUpdateDownload(result: found)
+    }
+
+    @objc private func handleMenuManualDownload() {
+        let urlStr = cachedUpdateResult?.release.html_url ?? "\(kGitHubURLString)/releases/latest"
+        if let url = URL(string: urlStr) {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    @objc private func handleMenuShowUpdateNotes() {
+        guard let found = cachedUpdateResult, found.hasUpdate else { return }
+        openSettingsWindow(tab: .about)
+        settingsController?.presentUpdateAlert(result: found)
+    }
+
+    // MARK: - GitHub Releases 自动更新检测与下载校验
+
+    private func startBackgroundUpdateCheck() {
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 5.0) { [weak self] in
+            self?.checkForUpdate { outcome in
+                if case .success(let result) = outcome {
+                    self?.settingsController?.applyUpdateCheckResult(result)
+                }
+            }
+        }
+    }
+
+    private func resolveEffectiveProxyForRequests() -> String? {
+        if let proxy = loadToolsConfig()?.proxy, proxy.enabled {
+            if proxy.mode?.lowercased() == "system" {
+                return detectMacOSSystemProxy()
+            }
+            if !proxy.url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return proxy.url.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
+        return detectMacOSSystemProxy()
+    }
+
+    private func normalizeVersion(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("v") || trimmed.hasPrefix("V") {
+            return String(trimmed.dropFirst())
+        }
+        return trimmed
+    }
+
+    private func isNewerVersion(_ latest: String, than current: String) -> Bool {
+        let lClean = normalizeVersion(latest).split(separator: "-").first.map(String.init) ?? ""
+        let cClean = normalizeVersion(current).split(separator: "-").first.map(String.init) ?? ""
+        let lParts = lClean.split(separator: ".").compactMap { Int($0) }
+        let cParts = cClean.split(separator: ".").compactMap { Int($0) }
+        let count = max(lParts.count, cParts.count)
+        for i in 0..<count {
+            let lv = i < lParts.count ? lParts[i] : 0
+            let cv = i < cParts.count ? cParts[i] : 0
+            if lv != cv { return lv > cv }
+        }
+        let lPre = latest.contains("-")
+        let cPre = current.contains("-")
+        return !lPre && cPre
+    }
+
+    fileprivate func checkForUpdate(completion: @escaping (Result<UpdateCheckResult, Error>) -> Void) {
+        let proxyUrl = resolveEffectiveProxyForRequests()
+        let currentVersion = normalizeVersion(
+            (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "1.0.0"
+        )
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+            var args = [
+                "--fail", "--silent", "--show-error", "--location",
+                "--connect-timeout", "10", "--max-time", "15",
+                "-H", "Accept: application/vnd.github+json",
+                "-H", "User-Agent: VibeCodeContextMenu/\(currentVersion)",
+            ]
+            if let p = proxyUrl, !p.isEmpty {
+                args.append(contentsOf: ["--proxy", p])
+            }
+            args.append("https://api.github.com/repos/myucxy/VibeCodeContextMenu/releases/latest")
+
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: "/usr/bin/curl")
+            proc.arguments = args
+            let outPipe = Pipe()
+            let errPipe = Pipe()
+            proc.standardOutput = outPipe
+            proc.standardError = errPipe
+
+            do {
+                try proc.run()
+                proc.waitUntilExit()
+                let data = outPipe.fileHandleForReading.readDataToEndOfFile()
+                if proc.terminationStatus != 0 {
+                    let errStr = String(data: errPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+                        .trimmingCharacters(in: .whitespacesAndNewlines) ?? "HTTP 请求失败"
+                    throw NSError(domain: "VibeCodeUpdate", code: Int(proc.terminationStatus), userInfo: [NSLocalizedDescriptionKey: errStr])
+                }
+
+                let release = try JSONDecoder().decode(GitHubReleaseInfo.self, from: data)
+                let latestVersion = self.normalizeVersion(release.tag_name)
+                let hasUpdate = self.isNewerVersion(latestVersion, than: currentVersion)
+
+                let assets = release.assets ?? []
+                let installer = assets.first(where: { $0.name.lowercased().hasSuffix(".dmg") })
+                    ?? assets.first(where: { $0.name.lowercased().hasSuffix(".pkg") })
+                let sha256 = installer.flatMap { inst in
+                    assets.first(where: { $0.name.lowercased() == (inst.name + ".sha256").lowercased() })
+                }
+
+                let result = UpdateCheckResult(
+                    hasUpdate: hasUpdate,
+                    currentVersion: currentVersion,
+                    latestVersion: latestVersion,
+                    release: release,
+                    installerAsset: installer,
+                    sha256Asset: sha256
+                )
+                DispatchQueue.main.async {
+                    self.cachedUpdateResult = result
+                    completion(.success(result))
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    completion(.failure(error))
+                }
+            }
+        }
+    }
+
+    fileprivate func downloadAndVerifyUpdate(
+        asset: GitHubReleaseAsset,
+        sha256Asset: GitHubReleaseAsset?,
+        completion: @escaping (Result<URL, Error>) -> Void
+    ) {
+        let proxyUrl = resolveEffectiveProxyForRequests()
+        let downloadsDir = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSTemporaryDirectory())
+        let safeName = (asset.name as NSString).lastPathComponent
+        let targetURL = downloadsDir.appendingPathComponent(safeName)
+        let partURL = downloadsDir.appendingPathComponent(safeName + ".part")
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                var args = ["--fail", "--silent", "--show-error", "--location", "--max-time", "300", "-o", partURL.path]
+                if let p = proxyUrl, !p.isEmpty {
+                    args.append(contentsOf: ["--proxy", p])
+                }
+                args.append(asset.browser_download_url)
+
+                let dlProc = Process()
+                dlProc.executableURL = URL(fileURLWithPath: "/usr/bin/curl")
+                dlProc.arguments = args
+                let dlErr = Pipe()
+                dlProc.standardError = dlErr
+                try dlProc.run()
+                dlProc.waitUntilExit()
+                if dlProc.terminationStatus != 0 {
+                    let msg = String(data: dlErr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+                        .trimmingCharacters(in: .whitespacesAndNewlines) ?? "下载失败"
+                    throw NSError(domain: "VibeCodeUpdate", code: Int(dlProc.terminationStatus), userInfo: [NSLocalizedDescriptionKey: msg])
+                }
+
+                if let sha = sha256Asset {
+                    var shaArgs = ["--fail", "--silent", "--location", "--max-time", "20"]
+                    if let p = proxyUrl, !p.isEmpty {
+                        shaArgs.append(contentsOf: ["--proxy", p])
+                    }
+                    shaArgs.append(sha.browser_download_url)
+                    let shaProc = Process()
+                    shaProc.executableURL = URL(fileURLWithPath: "/usr/bin/curl")
+                    shaProc.arguments = shaArgs
+                    let shaPipe = Pipe()
+                    shaProc.standardOutput = shaPipe
+                    try shaProc.run()
+                    shaProc.waitUntilExit()
+                    if shaProc.terminationStatus == 0 {
+                        let shaStr = String(data: shaPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+                        let expected = shaStr.split(whereSeparator: { $0.isWhitespace }).first.map(String.init) ?? ""
+                        if expected.count == 64 {
+                            let hashProc = Process()
+                            hashProc.executableURL = URL(fileURLWithPath: "/usr/bin/shasum")
+                            hashProc.arguments = ["-a", "256", partURL.path]
+                            let hashPipe = Pipe()
+                            hashProc.standardOutput = hashPipe
+                            try hashProc.run()
+                            hashProc.waitUntilExit()
+                            let actualOut = String(data: hashPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+                            let actual = actualOut.split(whereSeparator: { $0.isWhitespace }).first.map(String.init) ?? ""
+                            if actual.lowercased() != expected.lowercased() {
+                                try? FileManager.default.removeItem(at: partURL)
+                                throw NSError(domain: "VibeCodeUpdate", code: -2, userInfo: [NSLocalizedDescriptionKey: "SHA-256 校验失败，已删除损坏文件"])
+                            }
+                        }
+                    }
+                }
+
+                if FileManager.default.fileExists(atPath: targetURL.path) {
+                    try FileManager.default.removeItem(at: targetURL)
+                }
+                try FileManager.default.moveItem(at: partURL, to: targetURL)
+
+                DispatchQueue.main.async {
+                    completion(.success(targetURL))
+                }
+            } catch {
+                try? FileManager.default.removeItem(at: partURL)
+                DispatchQueue.main.async {
+                    completion(.failure(error))
+                }
+            }
         }
     }
 
@@ -2612,22 +3188,25 @@ final class VibeCodeAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
         return nil
     }
 
-    func updateProxyInToolsJson(enabled: Bool, url: String?, noProxy: String?) {
+    func updateProxyInToolsJson(enabled: Bool, mode: String? = nil, url: String?, noProxy: String?) {
         let targets = toolsJsonSyncTargets()
         let script = """
         import json, sys
         enabled = sys.argv[1] == "1"
-        url = sys.argv[2]
-        no_proxy_arg = sys.argv[3]
-        paths = sys.argv[4:]
+        mode_arg = sys.argv[2]
+        url = sys.argv[3]
+        no_proxy_arg = sys.argv[4]
+        paths = sys.argv[5:]
         for p in paths:
             with open(p, "r", encoding="utf-8-sig") as f:
                 data = json.load(f)
             proxy = data.get("proxy") if isinstance(data.get("proxy"), dict) else {}
+            final_mode = mode_arg if mode_arg else (proxy.get("mode") or "manual")
             final_url = url if url else proxy.get("url", "")
             final_no_proxy = no_proxy_arg if no_proxy_arg else (proxy.get("noProxy") or "localhost,127.0.0.1,::1")
             data["proxy"] = {
                 "enabled": enabled,
+                "mode": final_mode,
                 "url": final_url,
                 "noProxy": final_no_proxy,
             }
@@ -2635,7 +3214,7 @@ final class VibeCodeAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
                 json.dump(data, f, ensure_ascii=False, indent=2)
                 f.write("\\n")
         """
-        var args = ["-c", script, enabled ? "1" : "0", url ?? "", noProxy ?? ""]
+        var args = ["-c", script, enabled ? "1" : "0", mode ?? "", url ?? "", noProxy ?? ""]
         args.append(contentsOf: targets.map(\.path))
         runCommand("/usr/bin/python3", args: args)
     }

@@ -52,6 +52,7 @@ PY_OUT="$(/usr/bin/python3 - "$CONFIG_PATH" "$MACOS_CONFIG_PATH" "$TOOL_LABEL" "
 import json
 import os
 import shlex
+import subprocess
 import sys
 import tempfile
 
@@ -114,18 +115,40 @@ env_lines = []
 # 加载用户通过 VibeCode 配置的 API Key 环境变量文件
 env_lines.append(f'if [[ -f {shlex.quote(api_env_path)} ]]; then source {shlex.quote(api_env_path)}; fi')
 
-# 代理环境变量控制（对齐 Windows 版逻辑，同时兼容大小写变量名）
+# 代理环境变量控制（对齐 Windows 版逻辑，同时兼容大小写变量名，支持 system 实时跟随与 manual 固定地址）
+def detect_macos_system_proxy():
+    try:
+        out = subprocess.check_output(["/usr/sbin/scutil", "--proxy"], text=True, timeout=3)
+    except Exception:
+        return ""
+    kv = {}
+    for line in out.splitlines():
+        if ":" in line:
+            k, v = line.split(":", 1)
+            kv[k.strip()] = v.strip()
+    if kv.get("HTTPSEnable") == "1" and kv.get("HTTPSProxy") and kv.get("HTTPSPort"):
+        return f"http://{kv['HTTPSProxy']}:{kv['HTTPSPort']}"
+    if kv.get("HTTPEnable") == "1" and kv.get("HTTPProxy") and kv.get("HTTPPort"):
+        return f"http://{kv['HTTPProxy']}:{kv['HTTPPort']}"
+    if kv.get("SOCKSEnable") == "1" and kv.get("SOCKSProxy") and kv.get("SOCKSPort"):
+        return f"socks5://{kv['SOCKSProxy']}:{kv['SOCKSPort']}"
+    return ""
+
 if not entry["useProxy"]:
     env_lines.append("unset HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY http_proxy https_proxy all_proxy no_proxy")
-elif proxy_cfg.get("enabled") and str(proxy_cfg.get("url", "")).strip():
-    proxy_url = str(proxy_cfg["url"]).strip()
-    no_proxy = str(proxy_cfg.get("noProxy") or "localhost,127.0.0.1,::1").strip()
-    q_url = shlex.quote(proxy_url)
-    q_no = shlex.quote(no_proxy)
-    env_lines.append(f"export HTTP_PROXY={q_url} HTTPS_PROXY={q_url} http_proxy={q_url} https_proxy={q_url}")
-    env_lines.append(f"export NO_PROXY={q_no} no_proxy={q_no}")
-    if proxy_url.lower().startswith("socks"):
-        env_lines.append(f"export ALL_PROXY={q_url} all_proxy={q_url}")
+elif proxy_cfg.get("enabled"):
+    proxy_mode = str(proxy_cfg.get("mode") or "manual").strip().lower()
+    proxy_url = detect_macos_system_proxy() if proxy_mode == "system" else str(proxy_cfg.get("url", "")).strip()
+    if proxy_url:
+        no_proxy = str(proxy_cfg.get("noProxy") or "localhost,127.0.0.1,::1").strip()
+        q_url = shlex.quote(proxy_url)
+        q_no = shlex.quote(no_proxy)
+        env_lines.append(f"export HTTP_PROXY={q_url} HTTPS_PROXY={q_url} http_proxy={q_url} https_proxy={q_url}")
+        env_lines.append(f"export NO_PROXY={q_no} no_proxy={q_no}")
+        if proxy_url.lower().startswith("socks"):
+            env_lines.append(f"export ALL_PROXY={q_url} all_proxy={q_url}")
+    elif proxy_mode == "system":
+        env_lines.append("unset HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY http_proxy https_proxy all_proxy no_proxy")
 
 # 全局环境变量
 for k, v in global_env.items():
