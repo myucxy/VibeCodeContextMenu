@@ -4,11 +4,12 @@ using VibeCodeApp.Services;
 namespace VibeCodeApp.UI;
 
 /// <summary>
-/// 发现新版本弹窗：支持一键下载校验并拉起安装，或打开 GitHub Release 网页手动下载。
+/// 发现新版本弹窗：现代卡片风格，支持「在线更新」（自动下载 + SHA-256 校验 + 拉起安装）与「手动下载（打开网页）」。
 /// </summary>
 public sealed class UpdateDialog : Form
 {
     private readonly UpdateCheckResult _result;
+    private readonly bool _autoStartDownload;
     private readonly ProgressBar _progressBar = new();
     private readonly Label _statusLabel = new();
     private readonly Button _downloadBtn = new();
@@ -17,22 +18,33 @@ public sealed class UpdateDialog : Form
     private CancellationTokenSource? _downloadCts;
     private bool _isDownloading;
 
-    public UpdateDialog(UpdateCheckResult result)
+    private static readonly Color AccentBlue = Color.FromArgb(0, 120, 212);
+    private static readonly Color AccentBlueHover = Color.FromArgb(16, 110, 190);
+    private static readonly Color SurfaceBg = Color.FromArgb(247, 248, 250);
+    private static readonly Color DividerColor = Color.FromArgb(228, 231, 237);
+
+    public UpdateDialog(UpdateCheckResult result, bool autoStartDownload = false)
     {
         _result = result;
+        _autoStartDownload = autoStartDownload;
 
-        Text = $"发现新版本 v{result.LatestVersion}";
+        Text = $"VibeCode 软件更新 - v{result.LatestVersion}";
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         MinimizeBox = false;
         StartPosition = FormStartPosition.CenterParent;
         AutoScaleMode = AutoScaleMode.Dpi;
-        ClientSize = new Size(560, 420);
-        MinimumSize = new Size(520, 380);
+        ClientSize = new Size(580, 450);
+        MinimumSize = new Size(540, 400);
+        BackColor = SurfaceBg;
         Font = new Font("Microsoft YaHei UI", 9f);
         Icon = IconService.LoadMainAppIcon();
 
         BuildUI();
+        if (_autoStartDownload && _result.InstallerAsset is not null)
+        {
+            Shown += async (_, _) => await HandleDownloadAndInstallAsync();
+        }
     }
 
     private void BuildUI()
@@ -41,27 +53,104 @@ public sealed class UpdateDialog : Form
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
-            RowCount = 5,
-            Padding = new Padding(16, 14, 16, 14)
+            RowCount = 3,
+            Margin = new Padding(0),
+            Padding = new Padding(0)
         };
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));      // 标题与版本对比
-        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));  // 更新日志
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));      // 进度条
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));      // 状态文字
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));      // 按钮栏
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));      // 顶部白色卡片头
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));  // 中间更新日志与进度
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));      // 底部按钮区
 
-        var header = new Label
+        // 1. 顶部白色 Banner
+        var headerPanel = new Panel
         {
-            Text = $"VibeCode 有新版本可用：v{_result.CurrentVersion}  →  v{_result.LatestVersion}",
-            Font = new Font(Font, FontStyle.Bold),
+            Dock = DockStyle.Top,
             AutoSize = true,
-            Margin = new Padding(0, 0, 0, 10)
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            BackColor = Color.White,
+            Padding = new Padding(20, 16, 20, 14)
         };
-        root.Controls.Add(header, 0, 0);
+        headerPanel.Paint += (_, e) =>
+        {
+            using var pen = new Pen(DividerColor);
+            e.Graphics.DrawLine(pen, 0, headerPanel.Height - 1, headerPanel.Width, headerPanel.Height - 1);
+        };
+
+        var headerGrid = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            ColumnCount = 2,
+            RowCount = 2
+        };
+        headerGrid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        headerGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        headerGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        headerGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        var iconPic = new PictureBox
+        {
+            Image = IconService.LoadToolBitmap("VibeCode", "vibecode.ico", 44),
+            Size = new Size(44, 44),
+            SizeMode = PictureBoxSizeMode.Zoom,
+            Margin = new Padding(0, 2, 14, 2)
+        };
+        headerGrid.Controls.Add(iconPic, 0, 0);
+        headerGrid.SetRowSpan(iconPic, 2);
+
+        var titleLbl = new Label
+        {
+            Text = $"发现新版本 v{_result.LatestVersion}",
+            Font = new Font("Microsoft YaHei UI", 12.5f, FontStyle.Bold),
+            ForeColor = Color.FromArgb(24, 28, 36),
+            AutoSize = true,
+            Margin = new Padding(0, 0, 0, 4)
+        };
+        headerGrid.Controls.Add(titleLbl, 1, 0);
+
+        var sizeText = _result.InstallerAsset is not null
+            ? $"  ·  {_result.InstallerAsset.Name} ({_result.InstallerAsset.Size / (1024.0 * 1024.0):F1} MB)"
+            : string.Empty;
+        var subLbl = new Label
+        {
+            Text = $"当前版本 v{_result.CurrentVersion}  →  最新 v{_result.LatestVersion}{sizeText}",
+            ForeColor = Color.FromArgb(100, 108, 120),
+            AutoSize = true,
+            Margin = new Padding(0)
+        };
+        headerGrid.Controls.Add(subLbl, 1, 1);
+
+        headerPanel.Controls.Add(headerGrid);
+        root.Controls.Add(headerPanel, 0, 0);
+
+        // 2. 中间内容区（更新日志 + 下载进度）
+        var bodyGrid = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 4,
+            Padding = new Padding(20, 14, 20, 8)
+        };
+        bodyGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        bodyGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        bodyGrid.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        bodyGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        bodyGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        var notesTitle = new Label
+        {
+            Text = "更新内容",
+            Font = new Font(Font, FontStyle.Bold),
+            ForeColor = Color.FromArgb(55, 62, 74),
+            AutoSize = true,
+            Margin = new Padding(0, 0, 0, 6)
+        };
+        bodyGrid.Controls.Add(notesTitle, 0, 0);
 
         var notesText = string.IsNullOrWhiteSpace(_result.Release.Body)
-            ? "（该版本未填写更新说明，可点击下方按钮前往 GitHub 查看详情。）"
+            ? "（该版本未填写更新说明，可点击「手动下载」前往 GitHub Release 页面查看详情。）"
             : _result.Release.Body.Replace("\r\n", "\n").Replace("\n", "\r\n");
 
         var notesBox = new TextBox
@@ -70,31 +159,50 @@ public sealed class UpdateDialog : Form
             Multiline = true,
             ReadOnly = true,
             ScrollBars = ScrollBars.Vertical,
-            BackColor = SystemColors.Window,
+            BorderStyle = BorderStyle.FixedSingle,
+            BackColor = Color.White,
+            ForeColor = Color.FromArgb(40, 45, 55),
             Text = notesText,
             Margin = new Padding(0, 0, 0, 10)
         };
-        root.Controls.Add(notesBox, 0, 1);
+        bodyGrid.Controls.Add(notesBox, 0, 1);
 
         _progressBar.Dock = DockStyle.Top;
-        _progressBar.Height = 18;
+        _progressBar.Height = 14;
         _progressBar.Minimum = 0;
         _progressBar.Maximum = 100;
         _progressBar.Visible = false;
         _progressBar.Margin = new Padding(0, 0, 0, 6);
-        root.Controls.Add(_progressBar, 0, 2);
+        bodyGrid.Controls.Add(_progressBar, 0, 2);
 
         _statusLabel.AutoSize = true;
-        _statusLabel.ForeColor = SystemColors.GrayText;
-        _statusLabel.Margin = new Padding(0, 0, 0, 10);
+        _statusLabel.ForeColor = Color.FromArgb(95, 103, 115);
+        _statusLabel.Margin = new Padding(0, 0, 0, 2);
         _statusLabel.Text = _result.InstallerAsset is not null
-            ? $"匹配安装包: {_result.InstallerAsset.Name} ({_result.InstallerAsset.Size / (1024.0 * 1024.0):F1} MB)"
-            : "当前 Release 未找到匹配的自动安装包，请点击「打开网页手动下载」。";
-        root.Controls.Add(_statusLabel, 0, 3);
+            ? "点击「在线更新」将自动下载安装包并校验 SHA-256，或点击「手动下载」在浏览器中下载。"
+            : "当前 Release 未找到匹配的自动安装包，请点击「手动下载」前往网页下载。";
+        bodyGrid.Controls.Add(_statusLabel, 0, 3);
+
+        root.Controls.Add(bodyGrid, 0, 1);
+
+        // 3. 底部按钮栏
+        var footerPanel = new Panel
+        {
+            Dock = DockStyle.Bottom,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            BackColor = Color.White,
+            Padding = new Padding(20, 12, 20, 14)
+        };
+        footerPanel.Paint += (_, e) =>
+        {
+            using var pen = new Pen(DividerColor);
+            e.Graphics.DrawLine(pen, 0, 0, footerPanel.Width, 0);
+        };
 
         var btnBar = new TableLayoutPanel
         {
-            Dock = DockStyle.Top,
+            Dock = DockStyle.Fill,
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
             ColumnCount = 2,
@@ -115,14 +223,14 @@ public sealed class UpdateDialog : Form
         };
 
         var isSetupExe = _result.InstallerAsset?.Name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) == true;
-        _downloadBtn.Text = isSetupExe ? "一键下载并安装" : "下载更新包";
-        StyleButton(_downloadBtn, 128);
+        _downloadBtn.Text = isSetupExe ? "在线更新" : "在线下载更新包";
+        StylePrimaryButton(_downloadBtn, 118);
         _downloadBtn.Enabled = _result.InstallerAsset is not null;
-        _downloadBtn.Margin = new Padding(0, 0, 8, 0);
+        _downloadBtn.Margin = new Padding(0, 0, 10, 0);
         _downloadBtn.Click += async (_, _) => await HandleDownloadAndInstallAsync();
 
-        _webBtn.Text = "打开网页手动下载";
-        StyleButton(_webBtn, 132);
+        _webBtn.Text = "手动下载 (网页)";
+        StyleSecondaryButton(_webBtn, 128);
         _webBtn.Margin = new Padding(0);
         _webBtn.Click += (_, _) => OpenWebPage();
 
@@ -130,7 +238,7 @@ public sealed class UpdateDialog : Form
         leftFlow.Controls.Add(_webBtn);
 
         _closeBtn.Text = "稍后提醒";
-        StyleButton(_closeBtn, 92);
+        StyleSecondaryButton(_closeBtn, 92);
         _closeBtn.Anchor = AnchorStyles.Top | AnchorStyles.Right;
         _closeBtn.Margin = new Padding(8, 0, 0, 0);
         _closeBtn.Click += (_, _) =>
@@ -147,18 +255,41 @@ public sealed class UpdateDialog : Form
 
         btnBar.Controls.Add(leftFlow, 0, 0);
         btnBar.Controls.Add(_closeBtn, 1, 0);
-        root.Controls.Add(btnBar, 0, 4);
+        footerPanel.Controls.Add(btnBar);
+        root.Controls.Add(footerPanel, 0, 2);
 
         Controls.Add(root);
         CancelButton = _closeBtn;
     }
 
-    private static void StyleButton(Button btn, int minWidth)
+    private static void StylePrimaryButton(Button btn, int minWidth)
     {
         btn.AutoSize = true;
         btn.AutoSizeMode = AutoSizeMode.GrowAndShrink;
-        btn.MinimumSize = new Size(minWidth, 32);
-        btn.Padding = new Padding(10, 2, 10, 2);
+        btn.MinimumSize = new Size(minWidth, 34);
+        btn.Padding = new Padding(14, 4, 14, 4);
+        btn.FlatStyle = FlatStyle.Flat;
+        btn.FlatAppearance.BorderSize = 0;
+        btn.FlatAppearance.MouseOverBackColor = AccentBlueHover;
+        btn.BackColor = AccentBlue;
+        btn.ForeColor = Color.White;
+        btn.Font = new Font("Microsoft YaHei UI", 9f, FontStyle.Bold);
+        btn.Cursor = Cursors.Hand;
+    }
+
+    private static void StyleSecondaryButton(Button btn, int minWidth)
+    {
+        btn.AutoSize = true;
+        btn.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+        btn.MinimumSize = new Size(minWidth, 34);
+        btn.Padding = new Padding(12, 4, 12, 4);
+        btn.FlatStyle = FlatStyle.Flat;
+        btn.FlatAppearance.BorderColor = Color.FromArgb(208, 213, 221);
+        btn.FlatAppearance.BorderSize = 1;
+        btn.FlatAppearance.MouseOverBackColor = Color.FromArgb(242, 244, 247);
+        btn.BackColor = Color.White;
+        btn.ForeColor = Color.FromArgb(45, 52, 64);
+        btn.Cursor = Cursors.Hand;
     }
 
     private void OpenWebPage()
@@ -185,7 +316,7 @@ public sealed class UpdateDialog : Form
         _closeBtn.Text = "取消下载";
         _progressBar.Visible = true;
         _progressBar.Value = 0;
-        _statusLabel.ForeColor = SystemColors.WindowText;
+        _statusLabel.ForeColor = Color.FromArgb(30, 35, 45);
 
         _downloadCts?.Dispose();
         _downloadCts = new CancellationTokenSource();
@@ -218,7 +349,7 @@ public sealed class UpdateDialog : Form
 
             if (localFile.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
             {
-                _statusLabel.Text = "校验通过，正在启动安装向导...";
+                _statusLabel.Text = "SHA-256 校验通过，正在启动安装向导...";
                 Process.Start(new ProcessStartInfo(localFile) { UseShellExecute = true });
                 DialogResult = DialogResult.OK;
                 Close();

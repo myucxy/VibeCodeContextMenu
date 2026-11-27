@@ -65,6 +65,12 @@ public sealed class MainSettingsForm : Form
     // Tab 3: 关于与更新检测
     private readonly Button _checkUpdateBtn = new();
     private readonly Label _updateStatusLabel = new();
+    private readonly Panel _updateBannerCard = new();
+    private readonly Label _updateBannerTitle = new();
+    private readonly Label _updateBannerDetail = new();
+    private readonly Button _bannerOnlineUpdateBtn = new();
+    private readonly Button _bannerManualDownloadBtn = new();
+    private readonly Button _bannerNotesBtn = new();
     private UpdateCheckResult? _latestUpdateResult;
     private bool _checkingUpdate;
 
@@ -674,10 +680,10 @@ public sealed class MainSettingsForm : Form
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
-            RowCount = 10,
-            Padding = new Padding(24, 28, 24, 20)
+            RowCount = 11,
+            Padding = new Padding(28, 22, 28, 18)
         };
-        for (var i = 0; i < 9; i++)
+        for (var i = 0; i < 10; i++)
         {
             stack.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         }
@@ -737,17 +743,130 @@ public sealed class MainSettingsForm : Form
         };
         githubLink.LinkClicked += (_, _) => OpenUrl(AppMetadata.GitHubUrl);
 
+        // 检测到新版本时直接展示的精美更新卡片（含「在线更新」「手动下载」「更新日志」）
+        _updateBannerCard.Visible = false;
+        _updateBannerCard.AutoSize = true;
+        _updateBannerCard.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+        _updateBannerCard.BackColor = Color.FromArgb(240, 247, 255);
+        _updateBannerCard.Padding = new Padding(16, 12, 16, 12);
+        _updateBannerCard.Margin = new Padding(0, 0, 0, 12);
+        _updateBannerCard.Anchor = AnchorStyles.None;
+        _updateBannerCard.Paint += (_, e) =>
+        {
+            using var pen = new Pen(Color.FromArgb(180, 214, 250));
+            e.Graphics.DrawRectangle(pen, 0, 0, _updateBannerCard.Width - 1, _updateBannerCard.Height - 1);
+        };
+
+        var bannerGrid = new TableLayoutPanel
+        {
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            ColumnCount = 1,
+            RowCount = 3,
+            Margin = new Padding(0)
+        };
+        bannerGrid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        bannerGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        bannerGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        bannerGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        _updateBannerTitle.Font = new Font("Microsoft YaHei UI", 10f, FontStyle.Bold);
+        _updateBannerTitle.ForeColor = Color.FromArgb(0, 90, 158);
+        _updateBannerTitle.AutoSize = true;
+        _updateBannerTitle.Anchor = AnchorStyles.None;
+        _updateBannerTitle.Margin = new Padding(0, 0, 0, 3);
+
+        _updateBannerDetail.ForeColor = Color.FromArgb(75, 92, 112);
+        _updateBannerDetail.AutoSize = true;
+        _updateBannerDetail.Anchor = AnchorStyles.None;
+        _updateBannerDetail.Margin = new Padding(0, 0, 0, 10);
+
+        var bannerBtns = new FlowLayoutPanel
+        {
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            Anchor = AnchorStyles.None,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            Margin = new Padding(0)
+        };
+
+        _bannerOnlineUpdateBtn.Text = "在线更新";
+        _bannerOnlineUpdateBtn.AutoSize = true;
+        _bannerOnlineUpdateBtn.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+        _bannerOnlineUpdateBtn.MinimumSize = new Size(106, 32);
+        _bannerOnlineUpdateBtn.Padding = new Padding(12, 3, 12, 3);
+        _bannerOnlineUpdateBtn.FlatStyle = FlatStyle.Flat;
+        _bannerOnlineUpdateBtn.FlatAppearance.BorderSize = 0;
+        _bannerOnlineUpdateBtn.FlatAppearance.MouseOverBackColor = Color.FromArgb(16, 110, 190);
+        _bannerOnlineUpdateBtn.BackColor = Color.FromArgb(0, 120, 212);
+        _bannerOnlineUpdateBtn.ForeColor = Color.White;
+        _bannerOnlineUpdateBtn.Font = new Font("Microsoft YaHei UI", 9f, FontStyle.Bold);
+        _bannerOnlineUpdateBtn.Cursor = Cursors.Hand;
+        _bannerOnlineUpdateBtn.Margin = new Padding(0, 0, 8, 0);
+        _bannerOnlineUpdateBtn.Click += (_, _) =>
+        {
+            if (_latestUpdateResult is { HasUpdate: true } found)
+            {
+                ShowUpdateDialog(found, autoStartDownload: true);
+            }
+        };
+
+        _bannerManualDownloadBtn.Text = "手动下载 (网页)";
+        _bannerManualDownloadBtn.AutoSize = true;
+        _bannerManualDownloadBtn.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+        _bannerManualDownloadBtn.MinimumSize = new Size(124, 32);
+        _bannerManualDownloadBtn.Padding = new Padding(10, 3, 10, 3);
+        _bannerManualDownloadBtn.FlatStyle = FlatStyle.Flat;
+        _bannerManualDownloadBtn.FlatAppearance.BorderColor = Color.FromArgb(170, 198, 230);
+        _bannerManualDownloadBtn.FlatAppearance.BorderSize = 1;
+        _bannerManualDownloadBtn.BackColor = Color.White;
+        _bannerManualDownloadBtn.ForeColor = Color.FromArgb(30, 60, 95);
+        _bannerManualDownloadBtn.Cursor = Cursors.Hand;
+        _bannerManualDownloadBtn.Margin = new Padding(0, 0, 8, 0);
+        _bannerManualDownloadBtn.Click += (_, _) =>
+        {
+            var url = _latestUpdateResult?.Release.HtmlUrl;
+            OpenUrl(string.IsNullOrWhiteSpace(url) ? $"{AppMetadata.GitHubUrl}/releases/latest" : url);
+        };
+
+        _bannerNotesBtn.Text = "更新日志";
+        _bannerNotesBtn.AutoSize = true;
+        _bannerNotesBtn.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+        _bannerNotesBtn.MinimumSize = new Size(88, 32);
+        _bannerNotesBtn.Padding = new Padding(8, 3, 8, 3);
+        _bannerNotesBtn.FlatStyle = FlatStyle.Flat;
+        _bannerNotesBtn.FlatAppearance.BorderColor = Color.FromArgb(208, 213, 221);
+        _bannerNotesBtn.FlatAppearance.BorderSize = 1;
+        _bannerNotesBtn.BackColor = Color.White;
+        _bannerNotesBtn.ForeColor = Color.FromArgb(60, 68, 80);
+        _bannerNotesBtn.Cursor = Cursors.Hand;
+        _bannerNotesBtn.Margin = new Padding(0);
+        _bannerNotesBtn.Click += (_, _) =>
+        {
+            if (_latestUpdateResult is { HasUpdate: true } found)
+            {
+                ShowUpdateDialog(found, autoStartDownload: false);
+            }
+        };
+
+        bannerBtns.Controls.AddRange([_bannerOnlineUpdateBtn, _bannerManualDownloadBtn, _bannerNotesBtn]);
+        bannerGrid.Controls.Add(_updateBannerTitle, 0, 0);
+        bannerGrid.Controls.Add(_updateBannerDetail, 0, 1);
+        bannerGrid.Controls.Add(bannerBtns, 0, 2);
+        _updateBannerCard.Controls.Add(bannerGrid);
+
         var primaryPanel = new FlowLayoutPanel
         {
             AutoSize = true,
             Anchor = AnchorStyles.None,
             FlowDirection = FlowDirection.LeftToRight,
             WrapContents = false,
-            Margin = new Padding(0, 0, 0, 8)
+            Margin = new Padding(0, 0, 0, 6)
         };
 
         _checkUpdateBtn.Text = "检查更新";
-        StyleAutoButton(_checkUpdateBtn, 120);
+        StyleAutoButton(_checkUpdateBtn, 116);
         _checkUpdateBtn.Margin = new Padding(0, 0, 10, 0);
         _checkUpdateBtn.Click += async (_, _) => await CheckForUpdateAsync(silent: false);
 
@@ -756,17 +875,17 @@ public sealed class MainSettingsForm : Form
             Text = "访问 GitHub 仓库",
             Margin = new Padding(0)
         };
-        StyleAutoButton(openGitBtn, 150);
+        StyleAutoButton(openGitBtn, 146);
         openGitBtn.Click += (_, _) => OpenUrl(AppMetadata.GitHubUrl);
 
         primaryPanel.Controls.Add(_checkUpdateBtn);
         primaryPanel.Controls.Add(openGitBtn);
 
-        _updateStatusLabel.Text = "点击「检查更新」检测 GitHub Releases 新版本（支持一键更新或网页手动下载）";
+        _updateStatusLabel.Text = "点击「检查更新」检测 GitHub Releases 新版本";
         _updateStatusLabel.ForeColor = SystemColors.GrayText;
         _updateStatusLabel.AutoSize = true;
         _updateStatusLabel.Anchor = AnchorStyles.None;
-        _updateStatusLabel.Margin = new Padding(0, 0, 0, 14);
+        _updateStatusLabel.Margin = new Padding(0, 0, 0, 12);
 
         var auxPanel = new FlowLayoutPanel
         {
@@ -790,9 +909,10 @@ public sealed class MainSettingsForm : Form
         stack.Controls.Add(desc, 0, 3);
         stack.Controls.Add(author, 0, 4);
         stack.Controls.Add(githubLink, 0, 5);
-        stack.Controls.Add(primaryPanel, 0, 6);
-        stack.Controls.Add(_updateStatusLabel, 0, 7);
-        stack.Controls.Add(auxPanel, 0, 8);
+        stack.Controls.Add(_updateBannerCard, 0, 6);
+        stack.Controls.Add(primaryPanel, 0, 7);
+        stack.Controls.Add(_updateStatusLabel, 0, 8);
+        stack.Controls.Add(auxPanel, 0, 9);
 
         card.Controls.Add(stack);
         page.Controls.Add(card);
@@ -1606,21 +1726,28 @@ public sealed class MainSettingsForm : Form
         _latestUpdateResult = result;
         if (result.HasUpdate)
         {
-            _updateStatusLabel.Text = $"发现新版本 v{result.LatestVersion}（当前 v{result.CurrentVersion}），点击「检查更新」即可升级";
-            _updateStatusLabel.ForeColor = Color.DarkOrange;
+            _updateBannerTitle.Text = $"发现新版本 v{result.LatestVersion}（当前 v{result.CurrentVersion}）";
+            _updateBannerDetail.Text = result.InstallerAsset is not null
+                ? $"匹配安装包: {result.InstallerAsset.Name} ({result.InstallerAsset.Size / (1024.0 * 1024.0):F1} MB)"
+                : "可直接前往 GitHub Releases 网页手动下载最新版本";
+            _bannerOnlineUpdateBtn.Visible = result.InstallerAsset is not null;
+            _updateBannerCard.Visible = true;
+            _updateStatusLabel.Visible = false;
         }
         else
         {
+            _updateBannerCard.Visible = false;
+            _updateStatusLabel.Visible = true;
             _updateStatusLabel.Text = $"当前已是最新版本 (v{result.CurrentVersion})";
             _updateStatusLabel.ForeColor = Color.ForestGreen;
         }
     }
 
-    public void ShowUpdateDialog(UpdateCheckResult result)
+    public void ShowUpdateDialog(UpdateCheckResult result, bool autoStartDownload = false)
     {
         _latestUpdateResult = result;
         ApplyBackgroundUpdateResult(result);
-        using var dlg = new UpdateDialog(result);
+        using var dlg = new UpdateDialog(result, autoStartDownload);
         dlg.ShowDialog(this);
     }
 

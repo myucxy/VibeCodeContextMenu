@@ -31,7 +31,7 @@ internal static class Program
             return;
         }
 
-        // 3. 解析目标标签页（--manage / --proxy / --about / --tray）
+        // 3. 解析目标标签页（默认静默驻留托盘；仅显式传入 --manage / --proxy / --about 时打开窗口）
         var isTraySilent = args.Any(a => string.Equals(a, "--tray", StringComparison.OrdinalIgnoreCase));
         MainTabIndex? requestedTab = null;
         string ipcCommand = "manage";
@@ -46,13 +46,13 @@ internal static class Program
             requestedTab = MainTabIndex.About;
             ipcCommand = "about";
         }
-        else if (!isTraySilent)
+        else if (args.Any(a => string.Equals(a, "--manage", StringComparison.OrdinalIgnoreCase)))
         {
             requestedTab = MainTabIndex.Tools;
             ipcCommand = "manage";
         }
 
-        // 4. 单实例保护：若托盘实例已在运行，直接唤醒已有窗口并退出
+        // 4. 单实例保护：若托盘实例已在运行，双击程序或带参数启动时直接唤醒设置窗口
         using var mutex = new Mutex(initiallyOwned: true, SingleInstanceMutexName, out var createdNew);
         if (!createdNew)
         {
@@ -68,7 +68,6 @@ internal static class Program
         if (isFirstRun)
         {
             ConfigService.InitializeFirstRunDefaults();
-            requestedTab ??= MainTabIndex.Tools;
         }
         else
         {

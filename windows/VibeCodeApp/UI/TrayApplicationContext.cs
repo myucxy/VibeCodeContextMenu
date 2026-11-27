@@ -57,6 +57,14 @@ public sealed class TrayApplicationContext : ApplicationContext
         {
             _settingsForm.ShowAndSelectTab(openTabOnStart.Value);
         }
+        else
+        {
+            _notifyIcon.ShowBalloonTip(
+                2500,
+                "VibeCode 已在系统托盘运行",
+                "双击或右键托盘图标可打开设置，右键任意文件夹即可启动 AI CLI。",
+                ToolTipIcon.Info);
+        }
     }
 
     private void RebuildTrayMenu()
@@ -207,24 +215,48 @@ public sealed class TrayApplicationContext : ApplicationContext
         _trayMenu.Items.Add(new ToolStripSeparator());
 
         // 4. 检查更新、关于 & 退出
-        var updateItemText = _cachedUpdate is { HasUpdate: true } found
-            ? $"发现新版本 (v{found.LatestVersion})..."
-            : "检查更新...";
-        var updateItem = new ToolStripMenuItem(updateItemText);
-        updateItem.Click += async (_, _) =>
+        if (_cachedUpdate is { HasUpdate: true } found)
         {
-            if (_cachedUpdate is { HasUpdate: true } cached)
+            var updateRoot = new ToolStripMenuItem($"发现新版本 (v{found.LatestVersion})");
+            var onlineItem = new ToolStripMenuItem("在线更新（自动下载并安装）")
+            {
+                Enabled = found.InstallerAsset is not null
+            };
+            onlineItem.Click += (_, _) =>
             {
                 _settingsForm.ShowAndSelectTab(MainTabIndex.About);
-                _settingsForm.ShowUpdateDialog(cached);
-            }
-            else
+                _settingsForm.ShowUpdateDialog(found, autoStartDownload: true);
+            };
+            var manualItem = new ToolStripMenuItem("手动下载（打开网页）");
+            manualItem.Click += (_, _) =>
+            {
+                var url = string.IsNullOrWhiteSpace(found.Release.HtmlUrl)
+                    ? $"{AppMetadata.GitHubUrl}/releases/latest"
+                    : found.Release.HtmlUrl;
+                try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true }); } catch { }
+            };
+            var notesItem = new ToolStripMenuItem("查看更新日志...");
+            notesItem.Click += (_, _) =>
+            {
+                _settingsForm.ShowAndSelectTab(MainTabIndex.About);
+                _settingsForm.ShowUpdateDialog(found, autoStartDownload: false);
+            };
+            updateRoot.DropDownItems.Add(onlineItem);
+            updateRoot.DropDownItems.Add(manualItem);
+            updateRoot.DropDownItems.Add(new ToolStripSeparator());
+            updateRoot.DropDownItems.Add(notesItem);
+            _trayMenu.Items.Add(updateRoot);
+        }
+        else
+        {
+            var updateItem = new ToolStripMenuItem("检查更新...");
+            updateItem.Click += async (_, _) =>
             {
                 _settingsForm.ShowAndSelectTab(MainTabIndex.About);
                 await _settingsForm.CheckForUpdateAsync(silent: false);
-            }
-        };
-        _trayMenu.Items.Add(updateItem);
+            };
+            _trayMenu.Items.Add(updateItem);
+        }
 
         var aboutItem = new ToolStripMenuItem("关于 VibeCode");
         aboutItem.Click += (_, _) => _settingsForm.ShowAndSelectTab(MainTabIndex.About);
