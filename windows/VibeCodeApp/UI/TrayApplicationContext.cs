@@ -25,7 +25,13 @@ public sealed class TrayApplicationContext : ApplicationContext
         _ = _settingsForm.Handle;
 
         _trayMenu = new ContextMenuStrip();
-        _trayMenu.Opening += (_, _) => RebuildTrayMenu();
+        _trayMenu.Opening += (_, e) =>
+        {
+            RebuildTrayMenu();
+            e.Cancel = false;
+        };
+        // 预先填充菜单项，避免 WinForms 在首次右键空 ContextMenuStrip 时默认将 e.Cancel 设为 true
+        RebuildTrayMenu();
 
         _notifyIcon = new NotifyIcon
         {
