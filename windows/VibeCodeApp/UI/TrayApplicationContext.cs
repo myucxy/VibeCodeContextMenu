@@ -15,6 +15,7 @@ public sealed class TrayApplicationContext : ApplicationContext
     private readonly ContextMenuStrip _trayMenu;
     private readonly MainSettingsForm _settingsForm;
     private readonly CancellationTokenSource _ipcCts = new();
+    private UpdateCheckResult? _cachedUpdate;
     private bool _disposed;
 
     public TrayApplicationContext(MainTabIndex? openTabOnStart)
@@ -50,6 +51,7 @@ public sealed class TrayApplicationContext : ApplicationContext
         };
 
         StartIpcServer();
+        StartBackgroundUpdateCheck();
 
         if (openTabOnStart.HasValue)
         {
@@ -204,7 +206,26 @@ public sealed class TrayApplicationContext : ApplicationContext
         _trayMenu.Items.Add(proxyRoot);
         _trayMenu.Items.Add(new ToolStripSeparator());
 
-        // 4. 关于 & 退出
+        // 4. 检查更新、关于 & 退出
+        var updateItemText = _cachedUpdate is { HasUpdate: true } found
+            ? $"发现新版本 (v{found.LatestVersion})..."
+            : "检查更新...";
+        var updateItem = new ToolStripMenuItem(updateItemText);
+        updateItem.Click += async (_, _) =>
+        {
+            if (_cachedUpdate is { HasUpdate: true } cached)
+            {
+                _settingsForm.ShowAndSelectTab(MainTabIndex.About);
+                _settingsForm.ShowUpdateDialog(cached);
+            }
+            else
+            {
+                _settingsForm.ShowAndSelectTab(MainTabIndex.About);
+                await _settingsForm.CheckForUpdateAsync(silent: false);
+            }
+        };
+        _trayMenu.Items.Add(updateItem);
+
         var aboutItem = new ToolStripMenuItem("关于 VibeCode");
         aboutItem.Click += (_, _) => _settingsForm.ShowAndSelectTab(MainTabIndex.About);
         _trayMenu.Items.Add(aboutItem);
@@ -212,6 +233,42 @@ public sealed class TrayApplicationContext : ApplicationContext
         var quitItem = new ToolStripMenuItem("退出 VibeCode");
         quitItem.Click += (_, _) => ExitApplication();
         _trayMenu.Items.Add(quitItem);
+    }
+
+    private void StartBackgroundUpdateCheck()
+    {
+        var token = _ipcCts.Token;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                // 启动 5 秒后静默检查一次 GitHub Releases，不阻塞启动速度
+                await Task.Delay(TimeSpan.FromSeconds(5), token).ConfigureAwait(false);
+                var result = await UpdateService.CheckForUpdateAsync(token).ConfigureAwait(false);
+                _cachedUpdate = result;
+
+                if (!_settingsForm.IsDisposed && _settingsForm.IsHandleCreated)
+                {
+                    _settingsForm.BeginInvoke(() =>
+                    {
+                        if (_disposed || _settingsForm.IsDisposed) return;
+                        _settingsForm.ApplyBackgroundUpdateResult(result);
+                        if (result.HasUpdate)
+                        {
+                            _notifyIcon.ShowBalloonTip(
+                                4000,
+                                $"发现 VibeCode 新版本 v{result.LatestVersion}",
+                                "右键托盘图标点击「发现新版本」可一键更新或打开网页手动下载。",
+                                ToolTipIcon.Info);
+                        }
+                    });
+                }
+            }
+            catch
+            {
+                // 静默检查失败不影响正常使用
+            }
+        }, token);
     }
 
     private void StartIpcServer()

@@ -62,6 +62,12 @@ public sealed class MainSettingsForm : Form
     private string? _detectedSystemProxy;
     private CancellationTokenSource? _proxyTestCts;
 
+    // Tab 3: 关于与更新检测
+    private readonly Button _checkUpdateBtn = new();
+    private readonly Label _updateStatusLabel = new();
+    private UpdateCheckResult? _latestUpdateResult;
+    private bool _checkingUpdate;
+
     public MainSettingsForm()
     {
         Text = "VibeCode 设置";
@@ -668,10 +674,10 @@ public sealed class MainSettingsForm : Form
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
-            RowCount = 9,
-            Padding = new Padding(24, 34, 24, 24)
+            RowCount = 10,
+            Padding = new Padding(24, 28, 24, 20)
         };
-        for (var i = 0; i < 8; i++)
+        for (var i = 0; i < 9; i++)
         {
             stack.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         }
@@ -731,20 +737,43 @@ public sealed class MainSettingsForm : Form
         };
         githubLink.LinkClicked += (_, _) => OpenUrl(AppMetadata.GitHubUrl);
 
+        var primaryPanel = new FlowLayoutPanel
+        {
+            AutoSize = true,
+            Anchor = AnchorStyles.None,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            Margin = new Padding(0, 0, 0, 8)
+        };
+
+        _checkUpdateBtn.Text = "检查更新";
+        StyleAutoButton(_checkUpdateBtn, 120);
+        _checkUpdateBtn.Margin = new Padding(0, 0, 10, 0);
+        _checkUpdateBtn.Click += async (_, _) => await CheckForUpdateAsync(silent: false);
+
         var openGitBtn = new Button
         {
             Text = "访问 GitHub 仓库",
-            Anchor = AnchorStyles.None,
-            Margin = new Padding(0, 0, 0, 14)
+            Margin = new Padding(0)
         };
-        StyleAutoButton(openGitBtn, 160);
+        StyleAutoButton(openGitBtn, 150);
         openGitBtn.Click += (_, _) => OpenUrl(AppMetadata.GitHubUrl);
+
+        primaryPanel.Controls.Add(_checkUpdateBtn);
+        primaryPanel.Controls.Add(openGitBtn);
+
+        _updateStatusLabel.Text = "点击「检查更新」检测 GitHub Releases 新版本（支持一键更新或网页手动下载）";
+        _updateStatusLabel.ForeColor = SystemColors.GrayText;
+        _updateStatusLabel.AutoSize = true;
+        _updateStatusLabel.Anchor = AnchorStyles.None;
+        _updateStatusLabel.Margin = new Padding(0, 0, 0, 14);
 
         var auxPanel = new FlowLayoutPanel
         {
             AutoSize = true,
             Anchor = AnchorStyles.None,
-            FlowDirection = FlowDirection.LeftToRight
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false
         };
         var openDirBtn = new Button { Text = "打开配置目录", Margin = new Padding(0, 0, 8, 0) };
         StyleAutoButton(openDirBtn, 124);
@@ -761,8 +790,9 @@ public sealed class MainSettingsForm : Form
         stack.Controls.Add(desc, 0, 3);
         stack.Controls.Add(author, 0, 4);
         stack.Controls.Add(githubLink, 0, 5);
-        stack.Controls.Add(openGitBtn, 0, 6);
-        stack.Controls.Add(auxPanel, 0, 7);
+        stack.Controls.Add(primaryPanel, 0, 6);
+        stack.Controls.Add(_updateStatusLabel, 0, 7);
+        stack.Controls.Add(auxPanel, 0, 8);
 
         card.Controls.Add(stack);
         page.Controls.Add(card);
@@ -1567,6 +1597,90 @@ public sealed class MainSettingsForm : Form
             if (!IsDisposed)
             {
                 _testProxyBtn.Enabled = true;
+            }
+        }
+    }
+
+    public void ApplyBackgroundUpdateResult(UpdateCheckResult result)
+    {
+        _latestUpdateResult = result;
+        if (result.HasUpdate)
+        {
+            _updateStatusLabel.Text = $"发现新版本 v{result.LatestVersion}（当前 v{result.CurrentVersion}），点击「检查更新」即可升级";
+            _updateStatusLabel.ForeColor = Color.DarkOrange;
+        }
+        else
+        {
+            _updateStatusLabel.Text = $"当前已是最新版本 (v{result.CurrentVersion})";
+            _updateStatusLabel.ForeColor = Color.ForestGreen;
+        }
+    }
+
+    public void ShowUpdateDialog(UpdateCheckResult result)
+    {
+        _latestUpdateResult = result;
+        ApplyBackgroundUpdateResult(result);
+        using var dlg = new UpdateDialog(result);
+        dlg.ShowDialog(this);
+    }
+
+    public async Task CheckForUpdateAsync(bool silent = false)
+    {
+        if (_checkingUpdate) return;
+        _checkingUpdate = true;
+        _checkUpdateBtn.Enabled = false;
+        _updateStatusLabel.Text = "正在连接 GitHub 检查最新版本...";
+        _updateStatusLabel.ForeColor = SystemColors.GrayText;
+
+        try
+        {
+            var result = await UpdateService.CheckForUpdateAsync();
+            if (IsDisposed) return;
+
+            ApplyBackgroundUpdateResult(result);
+            if (!silent)
+            {
+                if (result.HasUpdate)
+                {
+                    using var dlg = new UpdateDialog(result);
+                    dlg.ShowDialog(this);
+                }
+                else
+                {
+                    MessageBox.Show(
+                        this,
+                        $"当前已是最新版本 (v{result.CurrentVersion})。",
+                        "检查更新",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Information);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            if (IsDisposed) return;
+            _updateStatusLabel.Text = $"检查更新失败: {ex.Message}";
+            _updateStatusLabel.ForeColor = Color.Crimson;
+            if (!silent)
+            {
+                var openWeb = MessageBox.Show(
+                    this,
+                    $"检查更新失败:\n{ex.Message}\n\n是否直接打开 GitHub Releases 网页查看？",
+                    "检查更新失败",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Warning);
+                if (openWeb == DialogResult.Yes)
+                {
+                    OpenUrl($"{AppMetadata.GitHubUrl}/releases/latest");
+                }
+            }
+        }
+        finally
+        {
+            _checkingUpdate = false;
+            if (!IsDisposed)
+            {
+                _checkUpdateBtn.Enabled = true;
             }
         }
     }
