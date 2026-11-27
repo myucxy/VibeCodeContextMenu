@@ -34,7 +34,10 @@ if ($Version -notmatch '^\d+(\.\d+){1,2}(-[0-9A-Za-z.-]+)?$') {
 
 if ([string]::IsNullOrWhiteSpace($OutputDir)) {
     $OutputDir = Join-Path $projectRoot 'dist'
+} elseif (-not [IO.Path]::IsPathRooted($OutputDir)) {
+    $OutputDir = Join-Path (Get-Location).Path $OutputDir
 }
+$OutputDir = [IO.Path]::GetFullPath($OutputDir)
 New-Item -Path $OutputDir -ItemType Directory -Force | Out-Null
 
 $runtimes = if ($Runtime -eq 'all') { @('win-x64', 'win-arm64') } else { @($Runtime) }
