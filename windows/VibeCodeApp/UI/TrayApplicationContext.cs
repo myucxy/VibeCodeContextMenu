@@ -36,34 +36,12 @@ public sealed class TrayApplicationContext : ApplicationContext
         };
         _notifyIcon.DoubleClick += (_, _) => _settingsForm.ShowAndSelectTab(MainTabIndex.Tools);
 
-        var shownHideTip = false;
-        _settingsForm.VisibleChanged += (_, _) =>
-        {
-            if (!_settingsForm.Visible && !shownHideTip && !_disposed)
-            {
-                shownHideTip = true;
-                _notifyIcon.ShowBalloonTip(
-                    3000,
-                    "VibeCode 已最小化到系统托盘",
-                    "可在右下角托盘（或 ^ 隐藏图标）中右键管理菜单与代理。",
-                    ToolTipIcon.Info);
-            }
-        };
-
         StartIpcServer();
         StartBackgroundUpdateCheck();
 
         if (openTabOnStart.HasValue)
         {
             _settingsForm.ShowAndSelectTab(openTabOnStart.Value);
-        }
-        else
-        {
-            _notifyIcon.ShowBalloonTip(
-                2500,
-                "VibeCode 已在系统托盘运行",
-                "双击或右键托盘图标可打开设置，右键任意文件夹即可启动 AI CLI。",
-                ToolTipIcon.Info);
         }
     }
 

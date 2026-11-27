@@ -43,6 +43,11 @@ public static class ToolDetector
         AddDir(Path.Combine(userProfile, ".local", "bin"));
         AddDir(Path.Combine(userProfile, ".opencode", "bin"));
         AddDir(Path.Combine(userProfile, ".cargo", "bin"));
+        AddDir(Path.Combine(userProfile, ".volta", "bin"));
+        AddDir(Path.Combine(userProfile, ".bun", "bin"));
+        AddDir(Path.Combine(userProfile, "scoop", "shims"));
+        AddDir(Path.Combine(localAppData, "pnpm"));
+        AddDir(Path.Combine(localAppData, "agy", "bin"));
         AddDir(Path.Combine(appData, "npm"));
         AddDir(Path.Combine(localAppData, "Microsoft", "WindowsApps"));
 
@@ -61,8 +66,32 @@ public static class ToolDetector
 
         foreach (var envVar in new[] { "NVM_SYMLINK", "NVM_HOME" })
         {
-            AddDir(Environment.GetEnvironmentVariable(envVar, EnvironmentVariableTarget.User));
-            AddDir(Environment.GetEnvironmentVariable(envVar, EnvironmentVariableTarget.Machine));
+            var userVal = Environment.GetEnvironmentVariable(envVar, EnvironmentVariableTarget.User);
+            var machineVal = Environment.GetEnvironmentVariable(envVar, EnvironmentVariableTarget.Machine);
+            AddDir(userVal);
+            AddDir(machineVal);
+
+            // 若 NVM 符号链接因权限或未激活无法直接解析，自动兜底扫描 NVM_HOME 下的版本目录
+            if (envVar == "NVM_HOME")
+            {
+                foreach (var nvmDir in new[] { userVal, machineVal })
+                {
+                    if (!string.IsNullOrWhiteSpace(nvmDir) && Directory.Exists(nvmDir))
+                    {
+                        try
+                        {
+                            foreach (var verDir in Directory.GetDirectories(nvmDir, "v*").OrderByDescending(d => d, StringComparer.OrdinalIgnoreCase))
+                            {
+                                AddDir(verDir);
+                            }
+                        }
+                        catch
+                        {
+                            // 忽略目录枚举异常
+                        }
+                    }
+                }
+            }
         }
 
         AddDir(Path.Combine(AppPaths.RuntimeRoot, "AiCli", "node_modules", ".bin"));
