@@ -124,6 +124,59 @@ jobs:
     needs: [prepare, build-windows, build-macos]
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout repository (for changelog)
+        uses: actions/checkout@v4
+        with:
+          lfs: false
+          fetch-depth: 0
+
+      - name: Generate categorized release notes from git commits
+        shell: bash
+        run: |
+          set -euo pipefail
+          CUR_TAG="${{ needs.prepare.outputs.tag }}"
+          # 找到当前 Tag 之前的上一个 v* 版本标签
+          PREV_TAG="$(git tag --list 'v*' --sort=-version:refname | grep -Fxv "$CUR_TAG" | head -n 1 || true)"
+
+          if [[ -n "$PREV_TAG" ]] && git rev-parse -q --verify "refs/tags/$PREV_TAG" >/dev/null; then
+            RANGE="${PREV_TAG}..HEAD"
+            COMPARE_LINK="https://github.com/${{ github.repository }}/compare/${PREV_TAG}...${CUR_TAG}"
+          else
+            RANGE="HEAD"
+            COMPARE_LINK="https://github.com/${{ github.repository }}/commits/${CUR_TAG}"
+          fi
+
+          FEATS="$(git log "$RANGE" --no-merges --pretty=format:'- %s (`%h`)' | grep -E '^- feat(\(|:)' || true)"
+          FIXES="$(git log "$RANGE" --no-merges --pretty=format:'- %s (`%h`)' | grep -E '^- fix(\(|:)' || true)"
+          OTHERS="$(git log "$RANGE" --no-merges --pretty=format:'- %s (`%h`)' | grep -Ev '^- (feat|fix)(\(|:)' || true)"
+
+          {
+            echo "## 更新内容"
+            echo ""
+            if [[ -n "$FEATS" ]]; then
+              echo "### ✨ 新功能"
+              echo "$FEATS"
+              echo ""
+            fi
+            if [[ -n "$FIXES" ]]; then
+              echo "### 🐛 问题修复"
+              echo "$FIXES"
+              echo ""
+            fi
+            if [[ -n "$OTHERS" ]]; then
+              echo "### 🔧 其他改进"
+              echo "$OTHERS"
+              echo ""
+            fi
+            if [[ -z "$FEATS" && -z "$FIXES" && -z "$OTHERS" ]]; then
+              echo "- 版本维护与常规构建发布"
+              echo ""
+            fi
+            echo "**Full Changelog**: ${COMPARE_LINK}"
+          } > release-notes.md
+
+          cat release-notes.md
+
       - name: Download all release artifacts
         uses: actions/download-artifact@v4
         with:
@@ -140,5 +193,5 @@ jobs:
           name: VibeCode Context Menu ${{ needs.prepare.outputs.tag }}
           draft: ${{ inputs.draft == true }}
           prerelease: ${{ inputs.prerelease == true }}
-          generate_release_notes: true
+          body_path: release-notes.md
           files: release-assets/*
