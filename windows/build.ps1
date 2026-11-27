@@ -4,7 +4,8 @@ param(
     [ValidateSet('auto', 'win-x64', 'win-arm64')]
     [string]$Runtime = 'auto',
     [string]$Version,
-    [switch]$FrameworkDependent,
+    [string]$DeployDir,
+    [switch]$SelfContained,
     [switch]$NoLaunch
 )
 
@@ -33,21 +34,26 @@ if ($Runtime -eq 'auto') {
     $Runtime = if ($arch -eq 'ARM64') { 'win-arm64' } else { 'win-x64' }
 }
 
-$selfContained = if ($FrameworkDependent) { 'false' } else { 'true' }
-$publishDir = Join-Path ([IO.Path]::GetTempPath()) ("VibeCodeWinBuild-" + [guid]::NewGuid().ToString('N'))
-$deployDir = Join-Path $env:LOCALAPPDATA 'VibeCode'
+$selfContainedFlag = if ($SelfContained) { 'true' } else { 'false' }
+$deployDir = if ([string]::IsNullOrWhiteSpace($DeployDir)) {
+    Join-Path $scriptDir 'out'
+} else {
+    $DeployDir
+}
+$publishDir = Join-Path $deployDir (".tmp-build-" + [guid]::NewGuid().ToString('N'))
+$supportDir = Join-Path $env:LOCALAPPDATA 'VibeCode'
 
 try {
     Write-Host "========================================" -ForegroundColor Cyan
     Write-Host "  VibeCode Windows 原生版构建" -ForegroundColor Cyan
-    Write-Host "  版本: v$Version | 架构: $Runtime | 独立单文件: $selfContained" -ForegroundColor Cyan
+    Write-Host "  版本: v$Version | 架构: $Runtime | 独立单文件: $selfContainedFlag" -ForegroundColor Cyan
     Write-Host "========================================" -ForegroundColor Cyan
 
     Write-Host '==> [1/3] 正在发布 VibeCode.exe...' -ForegroundColor Cyan
     & dotnet publish $csproj `
         -c Release `
         -r $Runtime `
-        --self-contained $selfContained `
+        --self-contained $selfContainedFlag `
         -p:PublishSingleFile=true `
         -p:IncludeNativeLibrariesForSelfExtract=true `
         "-p:Version=$Version" `
@@ -69,7 +75,7 @@ try {
     Copy-Item -LiteralPath $builtExe -Destination (Join-Path $deployDir 'VibeCode.exe') -Force
 
     # 记录项目目录，便于设置页修改 tools.json 时双向同步
-    $winCfgPath = Join-Path $deployDir 'windows.json'
+    $winCfgPath = Join-Path $supportDir 'windows.json'
     if (Test-Path -LiteralPath $winCfgPath -PathType Leaf) {
         try {
             $cfg = Get-Content -LiteralPath $winCfgPath -Raw -Encoding UTF8 | ConvertFrom-Json

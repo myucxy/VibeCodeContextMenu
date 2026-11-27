@@ -42,7 +42,10 @@ public sealed class ToolEditorDialog : Form
         MaximizeBox = false;
         MinimizeBox = false;
         StartPosition = FormStartPosition.CenterParent;
-        ClientSize = new Size(520, 415);
+        AutoScaleMode = AutoScaleMode.Dpi;
+        AutoSize = true;
+        AutoSizeMode = AutoSizeMode.GrowAndShrink;
+        MinimumSize = new Size(560, 0);
         Font = new Font("Microsoft YaHei UI", 9f);
         Icon = IconService.LoadMainAppIcon();
 
@@ -51,26 +54,35 @@ public sealed class ToolEditorDialog : Form
 
     private void BuildLayout(ToolEntry? existing)
     {
-        var y = 16;
-        const int labelX = 16;
-        const int labelW = 104;
-        const int fieldX = 126;
-        const int fieldW = 376;
+        var grid = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            ColumnCount = 2,
+            RowCount = 11,
+            Padding = new Padding(16, 14, 16, 14)
+        };
+        grid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        for (var r = 0; r < 11; r++) grid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
-        void AddFieldRow(string labelText, Control ctrl, int height = 25)
+        var row = 0;
+        void AddFieldRow(string labelText, Control ctrl)
         {
             var lbl = new Label
             {
                 Text = labelText,
-                Location = new Point(labelX, y + 4),
-                Size = new Size(labelW, 20),
-                TextAlign = ContentAlignment.MiddleRight
+                AutoSize = true,
+                Anchor = AnchorStyles.Right,
+                Margin = new Padding(0, 6, 10, 8)
             };
-            ctrl.Location = new Point(fieldX, y);
-            ctrl.Size = new Size(fieldW, height);
-            Controls.Add(lbl);
-            Controls.Add(ctrl);
-            y += height + 10;
+            ctrl.Dock = DockStyle.Fill;
+            ctrl.MinimumSize = new Size(360, 0);
+            ctrl.Margin = new Padding(0, 2, 0, 8);
+            grid.Controls.Add(lbl, 0, row);
+            grid.Controls.Add(ctrl, 1, row);
+            row++;
         }
 
         var tip = new Label
@@ -79,11 +91,12 @@ public sealed class ToolEditorDialog : Form
                 ? "修改命令、Super 模式、环境变量或代理策略（自动同步 tools.json）。"
                 : "填写任意自定义终端命令（19 款主流 AI CLI 已全部展示在主列表中）。",
             ForeColor = SystemColors.GrayText,
-            Location = new Point(16, y),
-            Size = new Size(488, 22)
+            AutoSize = true,
+            Margin = new Padding(0, 0, 0, 12)
         };
-        Controls.Add(tip);
-        y += 30;
+        grid.Controls.Add(tip, 0, row);
+        grid.SetColumnSpan(tip, 2);
+        row++;
 
         _nameBox.Text = existing?.Name ?? string.Empty;
         _nameBox.PlaceholderText = "例如: droid / lazygit / my-ai";
@@ -94,12 +107,11 @@ public sealed class ToolEditorDialog : Form
         AddFieldRow("基础命令:", _cmdBox);
 
         _superEnableCheck.Text = "启用 Super 模式（自动批准 / 跳过确认）";
+        _superEnableCheck.AutoSize = true;
         _superEnableCheck.Checked = existing?.Super is not null;
-        _superEnableCheck.Location = new Point(fieldX, y);
-        _superEnableCheck.Size = new Size(fieldW, 24);
+        _superEnableCheck.Margin = new Padding(0, 2, 0, 8);
         _superEnableCheck.CheckedChanged += (_, _) => UpdateSuperFieldsEnabled();
-        Controls.Add(_superEnableCheck);
-        y += 30;
+        grid.Controls.Add(_superEnableCheck, 1, row++);
 
         _superLabelBox.Text = existing?.Super?.Label ?? string.Empty;
         _superLabelBox.PlaceholderText = "例如: myAiSuper（留空默认 <名称>Super）";
@@ -121,58 +133,92 @@ public sealed class ToolEditorDialog : Form
         AddFieldRow("Super 环境变量:", _superEnvBox);
 
         _directCheck.Text = "强制直连（忽略 VibeCode CLI 代理，适合国内模型）";
+        _directCheck.AutoSize = true;
         _directCheck.Checked = existing?.UseProxy == false;
-        _directCheck.Location = new Point(fieldX, y);
-        _directCheck.Size = new Size(fieldW, 24);
-        Controls.Add(_directCheck);
-        y += 32;
+        _directCheck.Margin = new Padding(0, 2, 0, 10);
+        grid.Controls.Add(_directCheck, 1, row++);
 
         // 自定义图标选择行
         var iconTitle = new Label
         {
             Text = "菜单图标:",
-            Location = new Point(labelX, y + 4),
-            Size = new Size(labelW, 20),
-            TextAlign = ContentAlignment.MiddleRight
+            AutoSize = true,
+            Anchor = AnchorStyles.Right,
+            Margin = new Padding(0, 6, 10, 10)
         };
+        var iconRow = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            ColumnCount = 2,
+            RowCount = 1,
+            Margin = new Padding(0, 0, 0, 10)
+        };
+        iconRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        iconRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+
         _iconPathLabel.Text = string.IsNullOrWhiteSpace(_existingIconName) ? "自动生成品牌圆角图标" : _existingIconName;
         _iconPathLabel.ForeColor = SystemColors.GrayText;
-        _iconPathLabel.Location = new Point(fieldX, y + 4);
-        _iconPathLabel.Size = new Size(254, 20);
-        _iconPathLabel.AutoEllipsis = true;
+        _iconPathLabel.AutoSize = true;
+        _iconPathLabel.Anchor = AnchorStyles.Left;
+        _iconPathLabel.Margin = new Padding(0, 6, 8, 0);
 
         var pickIconBtn = new Button
         {
             Text = "选择图标...",
-            Location = new Point(fieldX + 260, y),
-            Size = new Size(116, 26)
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            MinimumSize = new Size(100, 30),
+            Padding = new Padding(8, 2, 8, 2),
+            Anchor = AnchorStyles.Right
         };
         pickIconBtn.Click += HandlePickIcon;
 
-        Controls.Add(iconTitle);
-        Controls.Add(_iconPathLabel);
-        Controls.Add(pickIconBtn);
-        y += 40;
+        iconRow.Controls.Add(_iconPathLabel, 0, 0);
+        iconRow.Controls.Add(pickIconBtn, 1, 0);
+        grid.Controls.Add(iconTitle, 0, row);
+        grid.Controls.Add(iconRow, 1, row);
+        row++;
 
         // 底部确定 / 取消按钮
-        var okBtn = new Button
+        var btnFlow = new FlowLayoutPanel
         {
-            Text = _isEditing ? "保存修改" : "添加工具",
-            Location = new Point(316, y),
-            Size = new Size(92, 30)
+            Dock = DockStyle.Fill,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            FlowDirection = FlowDirection.RightToLeft,
+            Margin = new Padding(0, 6, 0, 0)
         };
-        okBtn.Click += HandleConfirm;
 
         var cancelBtn = new Button
         {
             Text = "取消",
             DialogResult = DialogResult.Cancel,
-            Location = new Point(414, y),
-            Size = new Size(88, 30)
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            MinimumSize = new Size(88, 32),
+            Padding = new Padding(10, 2, 10, 2),
+            Margin = new Padding(8, 0, 0, 0)
         };
 
-        Controls.Add(okBtn);
-        Controls.Add(cancelBtn);
+        var okBtn = new Button
+        {
+            Text = _isEditing ? "保存修改" : "添加工具",
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            MinimumSize = new Size(96, 32),
+            Padding = new Padding(10, 2, 10, 2),
+            Margin = new Padding(0)
+        };
+        okBtn.Click += HandleConfirm;
+
+        btnFlow.Controls.Add(cancelBtn);
+        btnFlow.Controls.Add(okBtn);
+        grid.Controls.Add(btnFlow, 0, row);
+        grid.SetColumnSpan(btnFlow, 2);
+
+        Controls.Add(grid);
         AcceptButton = okBtn;
         CancelButton = cancelBtn;
 

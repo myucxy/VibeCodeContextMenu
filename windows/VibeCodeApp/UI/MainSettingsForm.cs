@@ -33,6 +33,9 @@ public sealed class MainSettingsForm : Form
     private readonly CheckBox _resumeModeCheck = new();
     private readonly Label _countHintLabel = new();
     private readonly ListView _toolListView = new();
+    private int _dragInsertIndex = -1;
+    private int _dragSourceIndex = -1;
+    private DateTime _lastAutoScrollTime = DateTime.MinValue;
     private readonly Button _addBtn = new();
     private readonly Button _editBtn = new();
     private readonly Button _deleteBtn = new();
@@ -63,8 +66,9 @@ public sealed class MainSettingsForm : Form
     {
         Text = "VibeCode 设置";
         StartPosition = FormStartPosition.CenterScreen;
-        ClientSize = new Size(740, 620);
-        MinimumSize = new Size(700, 560);
+        AutoScaleMode = AutoScaleMode.Dpi;
+        ClientSize = new Size(820, 650);
+        MinimumSize = new Size(760, 580);
         Font = new Font("Microsoft YaHei UI", 9f);
         Icon = IconService.LoadMainAppIcon();
 
@@ -141,6 +145,14 @@ public sealed class MainSettingsForm : Form
     // Tab 1: 工具与右键菜单
     // =========================================================================
 
+    private static void StyleAutoButton(Button btn, int minWidth = 72)
+    {
+        btn.AutoSize = true;
+        btn.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+        btn.MinimumSize = new Size(minWidth, 30);
+        btn.Padding = new Padding(8, 2, 8, 2);
+    }
+
     private void BuildToolsTab(TabPage page)
     {
         var root = new TableLayoutPanel
@@ -149,37 +161,65 @@ public sealed class MainSettingsForm : Form
             ColumnCount = 1,
             RowCount = 5
         };
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 114)); // 顶部控制卡片
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));  // 列表标题栏
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));      // 顶部控制卡片
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));      // 列表标题栏
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));  // 工具列表
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));  // 按钮栏
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 22));  // 底部提示
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));      // 按钮栏
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));      // 底部提示
 
-        // 1. 顶部控制分组框
+        // 1. 顶部控制分组框（自适应高 DPI，避免固定坐标裁切文字）
         var headerGroup = new GroupBox
         {
             Text = "资源管理器右键菜单",
-            Dock = DockStyle.Fill,
-            Padding = new Padding(10, 6, 10, 6)
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            Padding = new Padding(12, 8, 12, 10),
+            Margin = new Padding(0, 0, 0, 6)
         };
+
+        var headerGrid = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            ColumnCount = 2,
+            RowCount = 2
+        };
+        headerGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        headerGrid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        headerGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        headerGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
         _masterSwitch.Text = "在资源管理器右键菜单中显示 VibeCode";
         _masterSwitch.Font = new Font(Font, FontStyle.Bold);
-        _masterSwitch.Location = new Point(14, 22);
         _masterSwitch.AutoSize = true;
+        _masterSwitch.Anchor = AnchorStyles.Left;
+        _masterSwitch.Margin = new Padding(0, 2, 8, 8);
         _masterSwitch.CheckedChanged += (_, _) => HandleDisplayOptionChanged();
 
-        _masterStatusLabel.Location = new Point(320, 24);
-        _masterStatusLabel.Size = new Size(340, 20);
+        _masterStatusLabel.AutoSize = true;
+        _masterStatusLabel.Anchor = AnchorStyles.Right;
         _masterStatusLabel.TextAlign = ContentAlignment.MiddleRight;
-        _masterStatusLabel.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+        _masterStatusLabel.Margin = new Padding(8, 2, 0, 8);
+
+        var optionsFlow = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            Margin = new Padding(0)
+        };
 
         var layoutLbl = new Label
         {
             Text = "菜单排版:",
-            Location = new Point(14, 62),
-            Size = new Size(68, 22),
-            TextAlign = ContentAlignment.MiddleLeft
+            AutoSize = true,
+            Anchor = AnchorStyles.Left,
+            Margin = new Padding(0, 6, 6, 0)
         };
         _layoutCombo.DropDownStyle = ComboBoxStyle.DropDownList;
         _layoutCombo.Items.AddRange([
@@ -187,52 +227,70 @@ public sealed class MainSettingsForm : Form
             "平铺展开（全部同级）",
             "按工具折叠二级子菜单"
         ]);
-        _layoutCombo.Location = new Point(84, 60);
-        _layoutCombo.Size = new Size(196, 24);
+        _layoutCombo.Width = 220;
+        _layoutCombo.Margin = new Padding(0, 2, 16, 2);
         _layoutCombo.SelectedIndexChanged += (_, _) => HandleDisplayOptionChanged();
 
         var modeLbl = new Label
         {
             Text = "显示项:",
-            Location = new Point(296, 62),
-            Size = new Size(54, 22),
-            TextAlign = ContentAlignment.MiddleLeft
+            AutoSize = true,
+            Anchor = AnchorStyles.Left,
+            Margin = new Padding(0, 6, 6, 0)
         };
 
         _normalModeCheck.Text = "普通";
-        _normalModeCheck.Location = new Point(354, 62);
         _normalModeCheck.AutoSize = true;
+        _normalModeCheck.Margin = new Padding(0, 5, 10, 0);
         _normalModeCheck.CheckedChanged += (_, _) => HandleDisplayOptionChanged();
 
         _superModeCheck.Text = "Super";
-        _superModeCheck.Location = new Point(422, 62);
         _superModeCheck.AutoSize = true;
+        _superModeCheck.Margin = new Padding(0, 5, 10, 0);
         _superModeCheck.CheckedChanged += (_, _) => HandleDisplayOptionChanged();
 
         _resumeModeCheck.Text = "恢复 (-R)";
-        _resumeModeCheck.Location = new Point(496, 62);
         _resumeModeCheck.AutoSize = true;
+        _resumeModeCheck.Margin = new Padding(0, 5, 0, 0);
         _resumeModeCheck.CheckedChanged += (_, _) => HandleDisplayOptionChanged();
 
-        headerGroup.Controls.AddRange([_masterSwitch, _masterStatusLabel, layoutLbl, _layoutCombo, modeLbl, _normalModeCheck, _superModeCheck, _resumeModeCheck]);
+        optionsFlow.Controls.AddRange([layoutLbl, _layoutCombo, modeLbl, _normalModeCheck, _superModeCheck, _resumeModeCheck]);
+
+        headerGrid.Controls.Add(_masterSwitch, 0, 0);
+        headerGrid.Controls.Add(_masterStatusLabel, 1, 0);
+        headerGrid.Controls.Add(optionsFlow, 0, 1);
+        headerGrid.SetColumnSpan(optionsFlow, 2);
+
+        headerGroup.Controls.Add(headerGrid);
         root.Controls.Add(headerGroup, 0, 0);
 
         // 2. 列表标题与计数栏
-        var titleRow = new Panel { Dock = DockStyle.Fill };
+        var titleRow = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            ColumnCount = 2,
+            RowCount = 1,
+            Margin = new Padding(0, 2, 0, 4)
+        };
+        titleRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        titleRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+
         var sectionLabel = new Label
         {
             Text = "全部 AI 工具（未安装项不可勾选；拖拽或上下移排序，双击编辑）",
             ForeColor = SystemColors.GrayText,
-            Dock = DockStyle.Left,
             AutoSize = true,
-            Padding = new Padding(2, 6, 0, 0)
+            Anchor = AnchorStyles.Left,
+            Margin = new Padding(2, 2, 8, 2)
         };
-        _countHintLabel.Dock = DockStyle.Right;
         _countHintLabel.AutoSize = true;
+        _countHintLabel.Anchor = AnchorStyles.Right;
         _countHintLabel.ForeColor = SystemColors.GrayText;
-        _countHintLabel.Padding = new Padding(0, 6, 2, 0);
-        titleRow.Controls.Add(sectionLabel);
-        titleRow.Controls.Add(_countHintLabel);
+        _countHintLabel.Margin = new Padding(8, 2, 2, 2);
+        titleRow.Controls.Add(sectionLabel, 0, 0);
+        titleRow.Controls.Add(_countHintLabel, 1, 0);
         root.Controls.Add(titleRow, 0, 1);
 
         // 3. 工具列表 ListView（支持勾选、图标、未安装拦截、拖拽重排）
@@ -245,58 +303,86 @@ public sealed class MainSettingsForm : Form
         _toolListView.HideSelection = false;
         _toolListView.AllowDrop = true;
         _toolListView.SmallImageList = _toolImageList;
+        // 开启双缓冲，彻底消除拖拽重绘与列表刷新时的闪烁
+        typeof(Control).GetProperty("DoubleBuffered", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
+            ?.SetValue(_toolListView, true);
 
-        _toolListView.Columns.Add("工具名称", 210);
-        _toolListView.Columns.Add("启动命令与模式", 265);
-        _toolListView.Columns.Add("网络", 64, HorizontalAlignment.Center);
-        _toolListView.Columns.Add("状态", 74, HorizontalAlignment.Center);
+        _toolListView.Columns.Add("工具名称", 230);
+        _toolListView.Columns.Add("启动命令与模式", 290);
+        _toolListView.Columns.Add("网络", 70, HorizontalAlignment.Center);
+        _toolListView.Columns.Add("状态", 80, HorizontalAlignment.Center);
 
         _toolListView.MouseDown += (_, e) => _inhibitCheckOnDoubleClick = e.Clicks >= 2;
         _toolListView.ItemCheck += HandleToolItemCheck;
         _toolListView.SelectedIndexChanged += (_, _) => UpdateActionButtonsAndSummary();
         _toolListView.DoubleClick += (_, _) => HandleEditSelected();
+        _toolListView.KeyDown += HandleToolListKeyDown;
         _toolListView.ItemDrag += HandleToolItemDrag;
-        _toolListView.DragEnter += HandleToolDragEnter;
-        _toolListView.DragOver += HandleToolDragEnter;
+        _toolListView.DragEnter += HandleToolDragOver;
+        _toolListView.DragOver += HandleToolDragOver;
+        _toolListView.DragLeave += (_, _) => ClearDragIndicator();
         _toolListView.DragDrop += HandleToolDragDrop;
 
         root.Controls.Add(_toolListView, 0, 2);
 
-        // 4. 操作按钮栏
-        var btnBar = new Panel { Dock = DockStyle.Fill, Size = new Size(680, 42), Padding = new Padding(0, 8, 0, 2) };
+        // 4. 操作按钮栏（AutoSize 按钮，避免高 DPI 截断文字）
+        var btnBar = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            ColumnCount = 2,
+            RowCount = 1,
+            Margin = new Padding(0, 8, 0, 4)
+        };
+        btnBar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        btnBar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+
+        var leftBtns = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Left,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            Margin = new Padding(0)
+        };
 
         _addBtn.Text = "+ 自定义工具";
-        _addBtn.Location = new Point(0, 8);
-        _addBtn.Size = new Size(102, 28);
+        StyleAutoButton(_addBtn, 108);
+        _addBtn.Margin = new Padding(0, 0, 6, 0);
         _addBtn.Click += (_, _) => HandleAddTool();
 
         _editBtn.Text = "编辑";
-        _editBtn.Location = new Point(108, 8);
-        _editBtn.Size = new Size(64, 28);
+        StyleAutoButton(_editBtn, 68);
+        _editBtn.Margin = new Padding(0, 0, 6, 0);
         _editBtn.Click += (_, _) => HandleEditSelected();
 
         _deleteBtn.Text = "删除";
-        _deleteBtn.Location = new Point(178, 8);
-        _deleteBtn.Size = new Size(64, 28);
+        StyleAutoButton(_deleteBtn, 68);
+        _deleteBtn.Margin = new Padding(0, 0, 14, 0);
         _deleteBtn.Click += (_, _) => HandleDeleteSelected();
 
         _moveUpBtn.Text = "上移 ↑";
-        _moveUpBtn.Location = new Point(260, 8);
-        _moveUpBtn.Size = new Size(74, 28);
+        StyleAutoButton(_moveUpBtn, 78);
+        _moveUpBtn.Margin = new Padding(0, 0, 6, 0);
         _moveUpBtn.Click += (_, _) => HandleMoveSelected(-1);
 
         _moveDownBtn.Text = "下移 ↓";
-        _moveDownBtn.Location = new Point(340, 8);
-        _moveDownBtn.Size = new Size(74, 28);
+        StyleAutoButton(_moveDownBtn, 78);
+        _moveDownBtn.Margin = new Padding(0);
         _moveDownBtn.Click += (_, _) => HandleMoveSelected(+1);
 
+        leftBtns.Controls.AddRange([_addBtn, _editBtn, _deleteBtn, _moveUpBtn, _moveDownBtn]);
+
         _refreshBtn.Text = "刷新检测";
-        _refreshBtn.Size = new Size(88, 28);
-        _refreshBtn.Location = new Point(btnBar.Width - 88, 8);
+        StyleAutoButton(_refreshBtn, 92);
         _refreshBtn.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+        _refreshBtn.Margin = new Padding(8, 0, 0, 0);
         _refreshBtn.Click += (_, _) => ReloadAllFromDisk();
 
-        btnBar.Controls.AddRange([_addBtn, _editBtn, _deleteBtn, _moveUpBtn, _moveDownBtn, _refreshBtn]);
+        btnBar.Controls.Add(leftBtns, 0, 0);
+        btnBar.Controls.Add(_refreshBtn, 1, 0);
         root.Controls.Add(btnBar, 0, 3);
 
         // 5. 底部提示
@@ -304,8 +390,9 @@ public sealed class MainSettingsForm : Form
         {
             Text = "仅本机已安装的 CLI 允许勾选进右键菜单；所有修改实时写入注册表，无需重启资源管理器。",
             ForeColor = SystemColors.GrayText,
-            Dock = DockStyle.Fill,
-            TextAlign = ContentAlignment.MiddleLeft
+            AutoSize = true,
+            Dock = DockStyle.Top,
+            Margin = new Padding(2, 2, 2, 0)
         };
         root.Controls.Add(footer, 0, 4);
 
@@ -324,44 +411,69 @@ public sealed class MainSettingsForm : Form
             ColumnCount = 1,
             RowCount = 2
         };
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 118));
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
         // 卡片 1: 默认终端自动检测
         var termGroup = new GroupBox
         {
             Text = "默认终端（下拉仅显示本机已检测到的终端）",
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            Padding = new Padding(12, 8, 12, 10),
+            Margin = new Padding(0, 0, 0, 8)
+        };
+
+        var termGrid = new TableLayoutPanel
+        {
             Dock = DockStyle.Fill,
-            Padding = new Padding(12, 8, 12, 8)
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            ColumnCount = 1,
+            RowCount = 2
+        };
+        termGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        termGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        termGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        var termRow = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Left,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            Margin = new Padding(0, 0, 0, 6)
         };
 
         var termLbl = new Label
         {
             Text = "默认终端:",
-            Location = new Point(14, 30),
-            Size = new Size(74, 22),
-            TextAlign = ContentAlignment.MiddleLeft
+            AutoSize = true,
+            Margin = new Padding(0, 6, 8, 0)
         };
 
         _terminalCombo.DropDownStyle = ComboBoxStyle.DropDownList;
-        _terminalCombo.Location = new Point(92, 28);
-        _terminalCombo.Size = new Size(240, 24);
+        _terminalCombo.Width = 250;
+        _terminalCombo.Margin = new Padding(0, 2, 10, 2);
         _terminalCombo.SelectedIndexChanged += (_, _) => HandleTerminalChanged();
 
-        var redetectBtn = new Button
-        {
-            Text = "重新检测",
-            Location = new Point(342, 27),
-            Size = new Size(88, 26)
-        };
+        var redetectBtn = new Button { Text = "重新检测", Margin = new Padding(0, 1, 0, 1) };
+        StyleAutoButton(redetectBtn, 90);
         redetectBtn.Click += (_, _) => ReloadProxyAndTerminalTab();
 
-        _terminalDetectHintLabel.Location = new Point(14, 66);
-        _terminalDetectHintLabel.Size = new Size(650, 36);
-        _terminalDetectHintLabel.ForeColor = SystemColors.GrayText;
-        _terminalDetectHintLabel.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+        termRow.Controls.AddRange([termLbl, _terminalCombo, redetectBtn]);
 
-        termGroup.Controls.AddRange([termLbl, _terminalCombo, redetectBtn, _terminalDetectHintLabel]);
+        _terminalDetectHintLabel.AutoSize = true;
+        _terminalDetectHintLabel.MaximumSize = new Size(720, 0);
+        _terminalDetectHintLabel.ForeColor = SystemColors.GrayText;
+        _terminalDetectHintLabel.Margin = new Padding(2, 2, 2, 2);
+
+        termGrid.Controls.Add(termRow, 0, 0);
+        termGrid.Controls.Add(_terminalDetectHintLabel, 0, 1);
+        termGroup.Controls.Add(termGrid);
         root.Controls.Add(termGroup, 0, 0);
 
         // 卡片 2: CLI 代理配置与连通性测速
@@ -369,7 +481,7 @@ public sealed class MainSettingsForm : Form
         {
             Text = "CLI 代理（仅注入给 VibeCode 启动的终端会话，不修改系统环境变量）",
             Dock = DockStyle.Fill,
-            Padding = new Padding(12, 8, 12, 8)
+            Padding = new Padding(12, 8, 12, 10)
         };
 
         var proxyLayout = new TableLayoutPanel
@@ -378,15 +490,37 @@ public sealed class MainSettingsForm : Form
             ColumnCount = 1,
             RowCount = 2
         };
-        proxyLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 184));
+        proxyLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        proxyLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         proxyLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
-        var proxyForm = new Panel { Dock = DockStyle.Fill, Size = new Size(660, 184) };
+        var proxyForm = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            ColumnCount = 2,
+            RowCount = 6,
+            Margin = new Padding(0, 0, 0, 8)
+        };
+        proxyForm.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        proxyForm.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        for (var r = 0; r < 6; r++) proxyForm.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
+        // 行 0: 启用开关 + 跟随系统开关
+        var checkFlow = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Left,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            Margin = new Padding(0, 2, 0, 6)
+        };
         _proxyEnableCheck.Text = "启用 CLI 代理";
         _proxyEnableCheck.Font = new Font(Font, FontStyle.Bold);
-        _proxyEnableCheck.Location = new Point(4, 6);
         _proxyEnableCheck.AutoSize = true;
+        _proxyEnableCheck.Margin = new Padding(0, 0, 16, 0);
         _proxyEnableCheck.CheckedChanged += (_, _) =>
         {
             UpdateProxyInputState();
@@ -394,77 +528,112 @@ public sealed class MainSettingsForm : Form
         };
 
         _proxyFollowSystemCheck.Text = "跟随 Windows 系统代理（开代理生效，关代理直连）";
-        _proxyFollowSystemCheck.Location = new Point(140, 6);
         _proxyFollowSystemCheck.AutoSize = true;
+        _proxyFollowSystemCheck.Margin = new Padding(0);
         _proxyFollowSystemCheck.CheckedChanged += (_, _) =>
         {
             UpdateProxyInputState();
             if (!_suppressEvents) SaveProxySettings();
         };
+        checkFlow.Controls.AddRange([_proxyEnableCheck, _proxyFollowSystemCheck]);
+        proxyForm.Controls.Add(checkFlow, 0, 0);
+        proxyForm.SetColumnSpan(checkFlow, 2);
 
-        _sysProxyHintLabel.Location = new Point(4, 34);
-        _sysProxyHintLabel.Size = new Size(520, 22);
+        // 行 1: 系统代理提示 + 填入按钮
+        var sysRow = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            ColumnCount = 2,
+            RowCount = 1,
+            Margin = new Padding(0, 0, 0, 6)
+        };
+        sysRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        sysRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+
+        _sysProxyHintLabel.AutoSize = true;
+        _sysProxyHintLabel.Anchor = AnchorStyles.Left;
         _sysProxyHintLabel.ForeColor = SystemColors.GrayText;
-        _sysProxyHintLabel.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+        _sysProxyHintLabel.Margin = new Padding(0, 5, 8, 0);
 
         _fillSysProxyBtn.Text = "填入系统代理";
-        _fillSysProxyBtn.Size = new Size(112, 26);
-        _fillSysProxyBtn.Location = new Point(proxyForm.Width - 116, 30);
-        _fillSysProxyBtn.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+        StyleAutoButton(_fillSysProxyBtn, 112);
+        _fillSysProxyBtn.Anchor = AnchorStyles.Right;
+        _fillSysProxyBtn.Margin = new Padding(0);
         _fillSysProxyBtn.Click += (_, _) => HandleFillSystemProxy();
 
+        sysRow.Controls.Add(_sysProxyHintLabel, 0, 0);
+        sysRow.Controls.Add(_fillSysProxyBtn, 1, 0);
+        proxyForm.Controls.Add(sysRow, 0, 1);
+        proxyForm.SetColumnSpan(sysRow, 2);
+
+        // 行 2: 代理地址
         var urlLbl = new Label
         {
             Text = "代理地址:",
-            Location = new Point(4, 68),
-            Size = new Size(76, 22),
-            TextAlign = ContentAlignment.MiddleRight
+            AutoSize = true,
+            Anchor = AnchorStyles.Right,
+            Margin = new Padding(0, 6, 8, 6)
         };
         _proxyUrlBox.PlaceholderText = "例如: http://127.0.0.1:7897 或 socks5://127.0.0.1:7897";
-        _proxyUrlBox.Location = new Point(86, 66);
-        _proxyUrlBox.Size = new Size(proxyForm.Width - 92, 25);
-        _proxyUrlBox.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+        _proxyUrlBox.Dock = DockStyle.Fill;
+        _proxyUrlBox.Margin = new Padding(0, 2, 0, 6);
+        proxyForm.Controls.Add(urlLbl, 0, 2);
+        proxyForm.Controls.Add(_proxyUrlBox, 1, 2);
 
+        // 行 3: NO_PROXY
         var noProxyLbl = new Label
         {
             Text = "NO_PROXY:",
-            Location = new Point(4, 100),
-            Size = new Size(76, 22),
-            TextAlign = ContentAlignment.MiddleRight
+            AutoSize = true,
+            Anchor = AnchorStyles.Right,
+            Margin = new Padding(0, 6, 8, 6)
         };
         _noProxyBox.PlaceholderText = AppMetadata.DefaultNoProxy;
-        _noProxyBox.Location = new Point(86, 98);
-        _noProxyBox.Size = new Size(proxyForm.Width - 92, 25);
-        _noProxyBox.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+        _noProxyBox.Dock = DockStyle.Fill;
+        _noProxyBox.Margin = new Padding(0, 2, 0, 6);
+        proxyForm.Controls.Add(noProxyLbl, 0, 3);
+        proxyForm.Controls.Add(_noProxyBox, 1, 3);
+
+        // 行 4: 保存 / 测试 / 状态反馈
+        var actionFlow = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Left,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            Margin = new Padding(0, 2, 0, 6)
+        };
 
         _saveProxyBtn.Text = "保存代理设置";
-        _saveProxyBtn.Location = new Point(86, 132);
-        _saveProxyBtn.Size = new Size(106, 28);
+        StyleAutoButton(_saveProxyBtn, 112);
+        _saveProxyBtn.Margin = new Padding(0, 0, 8, 0);
         _saveProxyBtn.Click += (_, _) => SaveProxySettings();
 
         _testProxyBtn.Text = "测试连通性";
-        _testProxyBtn.Location = new Point(200, 132);
-        _testProxyBtn.Size = new Size(96, 28);
+        StyleAutoButton(_testProxyBtn, 102);
+        _testProxyBtn.Margin = new Padding(0, 0, 12, 0);
         _testProxyBtn.Click += async (_, _) => await HandleTestProxyAsync();
 
-        _proxyFeedbackLabel.Location = new Point(308, 136);
-        _proxyFeedbackLabel.Size = new Size(340, 22);
-        _proxyFeedbackLabel.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+        _proxyFeedbackLabel.AutoSize = true;
+        _proxyFeedbackLabel.Margin = new Padding(0, 6, 0, 0);
 
+        actionFlow.Controls.AddRange([_saveProxyBtn, _testProxyBtn, _proxyFeedbackLabel]);
+        proxyForm.Controls.Add(actionFlow, 1, 4);
+
+        // 行 5: 提示
         var directTip = new Label
         {
             Text = "提示: 如需为国内模型（如 qwen / kimi）单独直连，请在「工具与右键菜单」双击该工具勾选「强制直连」。",
             ForeColor = SystemColors.GrayText,
-            Location = new Point(4, 164),
-            Size = new Size(640, 18),
-            Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right
+            AutoSize = true,
+            MaximumSize = new Size(720, 0),
+            Margin = new Padding(0, 2, 0, 2)
         };
-
-        proxyForm.Controls.AddRange([
-            _proxyEnableCheck, _proxyFollowSystemCheck, _sysProxyHintLabel, _fillSysProxyBtn,
-            urlLbl, _proxyUrlBox, noProxyLbl, _noProxyBox,
-            _saveProxyBtn, _testProxyBtn, _proxyFeedbackLabel, directTip
-        ]);
+        proxyForm.Controls.Add(directTip, 0, 5);
+        proxyForm.SetColumnSpan(directTip, 2);
 
         _proxyTestOutputBox.Dock = DockStyle.Fill;
         _proxyTestOutputBox.Multiline = true;
@@ -565,10 +734,10 @@ public sealed class MainSettingsForm : Form
         var openGitBtn = new Button
         {
             Text = "访问 GitHub 仓库",
-            Size = new Size(148, 32),
             Anchor = AnchorStyles.None,
             Margin = new Padding(0, 0, 0, 14)
         };
+        StyleAutoButton(openGitBtn, 160);
         openGitBtn.Click += (_, _) => OpenUrl(AppMetadata.GitHubUrl);
 
         var auxPanel = new FlowLayoutPanel
@@ -577,9 +746,11 @@ public sealed class MainSettingsForm : Form
             Anchor = AnchorStyles.None,
             FlowDirection = FlowDirection.LeftToRight
         };
-        var openDirBtn = new Button { Text = "打开配置目录", Size = new Size(116, 28) };
+        var openDirBtn = new Button { Text = "打开配置目录", Margin = new Padding(0, 0, 8, 0) };
+        StyleAutoButton(openDirBtn, 124);
         openDirBtn.Click += (_, _) => OpenPath(AppPaths.SupportDir);
-        var editJsonBtn = new Button { Text = "编辑 tools.json", Size = new Size(116, 28) };
+        var editJsonBtn = new Button { Text = "编辑 tools.json", Margin = new Padding(0) };
+        StyleAutoButton(editJsonBtn, 124);
         editJsonBtn.Click += (_, _) => OpenPath(AppPaths.ToolsConfigPath);
         auxPanel.Controls.Add(openDirBtn);
         auxPanel.Controls.Add(editJsonBtn);
@@ -703,6 +874,8 @@ public sealed class MainSettingsForm : Form
             _toolListView.BeginUpdate();
             _toolListView.Items.Clear();
             _toolImageList.Images.Clear();
+            // 提前创建 ImageList 句柄，避免在窗体句柄尚未建立时 Add(bmp) 仅保存引用、随后 using 释放导致 CreateHandle 崩溃
+            _ = _toolImageList.Handle;
 
             for (var i = 0; i < _rows.Count; i++)
             {
@@ -1061,38 +1234,165 @@ public sealed class MainSettingsForm : Form
         RebuildListView(target);
     }
 
+    private void HandleToolListKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Alt && e.KeyCode == Keys.Up)
+        {
+            HandleMoveSelected(-1);
+            e.Handled = true;
+            e.SuppressKeyPress = true;
+        }
+        else if (e.Alt && e.KeyCode == Keys.Down)
+        {
+            HandleMoveSelected(+1);
+            e.Handled = true;
+            e.SuppressKeyPress = true;
+        }
+    }
+
     private void HandleToolItemDrag(object? sender, ItemDragEventArgs e)
     {
         if (e.Item is ListViewItem item)
         {
-            DoDragDrop(item, DragDropEffects.Move);
+            _dragSourceIndex = item.Index;
+            _dragInsertIndex = -1;
+            try
+            {
+                DoDragDrop(item, DragDropEffects.Move);
+            }
+            finally
+            {
+                ClearDragIndicator();
+                _dragSourceIndex = -1;
+            }
         }
     }
 
-    private void HandleToolDragEnter(object? sender, DragEventArgs e)
+    private void HandleToolDragOver(object? sender, DragEventArgs e)
     {
-        e.Effect = e.Data?.GetDataPresent(typeof(ListViewItem)) == true
-            ? DragDropEffects.Move
-            : DragDropEffects.None;
+        if (e.Data?.GetDataPresent(typeof(ListViewItem)) != true)
+        {
+            e.Effect = DragDropEffects.None;
+            ClearDragIndicator();
+            return;
+        }
+
+        e.Effect = DragDropEffects.Move;
+        var pt = _toolListView.PointToClient(new Point(e.X, e.Y));
+
+        // 接近列表顶部或底部边缘时自动平滑滚动
+        var now = DateTime.UtcNow;
+        if ((now - _lastAutoScrollTime).TotalMilliseconds >= 90 && _toolListView.Items.Count > 0)
+        {
+            var topItem = _toolListView.TopItem;
+            if (pt.Y < 44 && topItem is not null && topItem.Index > 0)
+            {
+                _toolListView.EnsureVisible(topItem.Index - 1);
+                _lastAutoScrollTime = now;
+            }
+            else if (pt.Y > _toolListView.ClientSize.Height - 28)
+            {
+                var hit = _toolListView.GetItemAt(16, _toolListView.ClientSize.Height - 10);
+                if (hit is not null && hit.Index + 1 < _toolListView.Items.Count)
+                {
+                    _toolListView.EnsureVisible(hit.Index + 1);
+                    _lastAutoScrollTime = now;
+                }
+            }
+        }
+
+        var insertIdx = ComputeDragInsertIndex(pt);
+        if (insertIdx != _dragInsertIndex)
+        {
+            ClearDragIndicator();
+            _dragInsertIndex = insertIdx;
+            DrawDragInsertionLine(insertIdx);
+        }
+    }
+
+    private int ComputeDragInsertIndex(Point clientPt)
+    {
+        if (_toolListView.Items.Count == 0) return 0;
+
+        var targetItem = _toolListView.GetItemAt(Math.Max(16, clientPt.X), clientPt.Y);
+        if (targetItem is not null)
+        {
+            var bounds = targetItem.GetBounds(ItemBoundsPortion.Entire);
+            var insertAfter = clientPt.Y >= bounds.Top + bounds.Height / 2;
+            return insertAfter ? targetItem.Index + 1 : targetItem.Index;
+        }
+
+        var firstBounds = _toolListView.Items[0].GetBounds(ItemBoundsPortion.Entire);
+        return clientPt.Y < firstBounds.Top ? 0 : _toolListView.Items.Count;
+    }
+
+    private void DrawDragInsertionLine(int insertIdx)
+    {
+        if (insertIdx < 0 || _toolListView.Items.Count == 0) return;
+
+        int lineY;
+        if (insertIdx < _toolListView.Items.Count)
+        {
+            lineY = _toolListView.Items[insertIdx].GetBounds(ItemBoundsPortion.Entire).Top;
+        }
+        else
+        {
+            lineY = _toolListView.Items[_toolListView.Items.Count - 1].GetBounds(ItemBoundsPortion.Entire).Bottom - 1;
+        }
+
+        lineY = Math.Clamp(lineY, 24, _toolListView.ClientSize.Height - 2);
+        using var g = _toolListView.CreateGraphics();
+        var accent = Color.FromArgb(0, 120, 215);
+        using var pen = new Pen(accent, 2f);
+        using var brush = new SolidBrush(accent);
+        var left = 4;
+        var right = Math.Max(left + 20, _toolListView.ClientSize.Width - 6);
+        g.DrawLine(pen, left, lineY, right, lineY);
+        // 左侧小三角指示插入位置
+        g.FillPolygon(brush, new Point[]
+        {
+            new Point(left, lineY - 4),
+            new Point(left + 6, lineY),
+            new Point(left, lineY + 4)
+        });
+    }
+
+    private void ClearDragIndicator()
+    {
+        if (_dragInsertIndex >= 0)
+        {
+            _dragInsertIndex = -1;
+            _toolListView.Invalidate();
+            _toolListView.Update();
+        }
     }
 
     private void HandleToolDragDrop(object? sender, DragEventArgs e)
     {
-        if (e.Data?.GetData(typeof(ListViewItem)) is not ListViewItem dragged) return;
-        var sourceIdx = dragged.Index;
+        if (e.Data?.GetData(typeof(ListViewItem)) is not ListViewItem dragged)
+        {
+            ClearDragIndicator();
+            return;
+        }
+
+        var sourceIdx = _dragSourceIndex >= 0 ? _dragSourceIndex : dragged.Index;
+        var pt = _toolListView.PointToClient(new Point(e.X, e.Y));
+        var insertIdx = _dragInsertIndex >= 0 ? _dragInsertIndex : ComputeDragInsertIndex(pt);
+        ClearDragIndicator();
+
         if (sourceIdx < 0 || sourceIdx >= _rows.Count) return;
 
-        var pt = _toolListView.PointToClient(new Point(e.X, e.Y));
-        var targetItem = _toolListView.GetItemAt(pt.X, pt.Y);
-        var targetIdx = targetItem is not null ? targetItem.Index : _rows.Count - 1;
-        if (targetIdx == sourceIdx) return;
+        // 移除源项后，若目标在其之后需向前校正一位
+        var finalIdx = insertIdx > sourceIdx ? insertIdx - 1 : insertIdx;
+        finalIdx = Math.Clamp(finalIdx, 0, _rows.Count - 1);
+        if (finalIdx == sourceIdx) return;
 
         var moved = _rows[sourceIdx];
         _rows.RemoveAt(sourceIdx);
-        _rows.Insert(targetIdx, moved);
+        _rows.Insert(finalIdx, moved);
 
         PersistWindowsConfigAndSyncRegistry();
-        RebuildListView(targetIdx);
+        RebuildListView(finalIdx);
     }
 
     // =========================================================================

@@ -15,6 +15,7 @@ public sealed class TrayApplicationContext : ApplicationContext
     private readonly ContextMenuStrip _trayMenu;
     private readonly MainSettingsForm _settingsForm;
     private readonly CancellationTokenSource _ipcCts = new();
+    private bool _disposed;
 
     public TrayApplicationContext(MainTabIndex? openTabOnStart)
     {
@@ -27,12 +28,26 @@ public sealed class TrayApplicationContext : ApplicationContext
 
         _notifyIcon = new NotifyIcon
         {
-            Icon = IconService.LoadMainAppIcon(),
+            Icon = IconService.LoadTrayIcon(),
             Text = $"VibeCode v{AppPaths.AppVersion}",
             ContextMenuStrip = _trayMenu,
             Visible = true
         };
         _notifyIcon.DoubleClick += (_, _) => _settingsForm.ShowAndSelectTab(MainTabIndex.Tools);
+
+        var shownHideTip = false;
+        _settingsForm.VisibleChanged += (_, _) =>
+        {
+            if (!_settingsForm.Visible && !shownHideTip && !_disposed)
+            {
+                shownHideTip = true;
+                _notifyIcon.ShowBalloonTip(
+                    3000,
+                    "VibeCode 已最小化到系统托盘",
+                    "可在右下角托盘（或 ^ 隐藏图标）中右键管理菜单与代理。",
+                    ToolTipIcon.Info);
+            }
+        };
 
         StartIpcServer();
 
@@ -98,14 +113,54 @@ public sealed class TrayApplicationContext : ApplicationContext
         _trayMenu.Items.Add(terminalRoot);
 
         // 3. CLI 代理快捷切换
-        var proxyLabel = (toolsCfg.Proxy is { Enabled: true } p && !string.IsNullOrWhiteSpace(p.Url))
-            ? $"CLI 代理: 已启用 ({p.Url})"
-            : "CLI 代理: 未启用";
+        var sysProxy = ProxyService.DetectWindowsSystemProxy();
+        string proxyLabel;
+        if (toolsCfg.Proxy is { Enabled: true } p)
+        {
+            if (string.Equals(p.Mode, "system", StringComparison.OrdinalIgnoreCase))
+            {
+                proxyLabel = !string.IsNullOrWhiteSpace(sysProxy)
+                    ? $"CLI 代理: 跟随系统 ({sysProxy})"
+                    : "CLI 代理: 跟随系统 (当前直连)";
+            }
+            else if (!string.IsNullOrWhiteSpace(p.Url))
+            {
+                proxyLabel = $"CLI 代理: 已启用 ({p.Url})";
+            }
+            else
+            {
+                proxyLabel = "CLI 代理: 未启用";
+            }
+        }
+        else
+        {
+            proxyLabel = "CLI 代理: 未启用";
+        }
         var proxyRoot = new ToolStripMenuItem(proxyLabel);
 
-        var sysProxy = ProxyService.DetectWindowsSystemProxy();
+        var followSysItem = new ToolStripMenuItem(
+            sysProxy is not null ? $"跟随 Windows 系统代理 ({sysProxy})" : "跟随 Windows 系统代理 (当前未开启)")
+        {
+            Checked = toolsCfg.Proxy is { Enabled: true } fp &&
+                string.Equals(fp.Mode, "system", StringComparison.OrdinalIgnoreCase)
+        };
+        followSysItem.Click += (_, _) =>
+        {
+            var cfg = ConfigService.LoadToolsConfig();
+            cfg.Proxy = new ProxySettings
+            {
+                Enabled = true,
+                Mode = "system",
+                Url = cfg.Proxy?.Url ?? string.Empty,
+                NoProxy = string.IsNullOrWhiteSpace(cfg.Proxy?.NoProxy) ? AppMetadata.DefaultNoProxy : cfg.Proxy.NoProxy
+            };
+            ConfigService.SaveToolsConfig(cfg);
+            if (_settingsForm.Visible) _settingsForm.ReloadAllFromDisk();
+        };
+        proxyRoot.DropDownItems.Add(followSysItem);
+
         var useSysItem = new ToolStripMenuItem(
-            sysProxy is not null ? $"启用 Windows 系统代理 ({sysProxy})" : "未检测到 Windows 系统代理")
+            sysProxy is not null ? $"固定使用当前系统代理 ({sysProxy})" : "未检测到 Windows 系统代理")
         {
             Enabled = sysProxy is not null
         };
@@ -116,6 +171,7 @@ public sealed class TrayApplicationContext : ApplicationContext
             cfg.Proxy = new ProxySettings
             {
                 Enabled = true,
+                Mode = "manual",
                 Url = sysProxy,
                 NoProxy = string.IsNullOrWhiteSpace(cfg.Proxy?.NoProxy) ? AppMetadata.DefaultNoProxy : cfg.Proxy.NoProxy
             };
@@ -229,9 +285,10 @@ public sealed class TrayApplicationContext : ApplicationContext
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing)
+        if (!_disposed && disposing)
         {
-            _ipcCts.Cancel();
+            _disposed = true;
+            try { _ipcCts.Cancel(); } catch (ObjectDisposedException) { }
             _ipcCts.Dispose();
             _notifyIcon.Visible = false;
             _notifyIcon.Dispose();

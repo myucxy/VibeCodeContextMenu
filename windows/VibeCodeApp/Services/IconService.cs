@@ -1,6 +1,7 @@
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
+using System.Runtime.InteropServices;
 
 namespace VibeCodeApp.Services;
 
@@ -111,18 +112,122 @@ public static class IconService
         return fileName;
     }
 
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool DestroyIcon(IntPtr hIcon);
+
     public static Icon LoadMainAppIcon()
     {
         var path = EnsureMainIconPath();
+        return LoadCrispIconFromIco(path, SystemInformation.IconSize);
+    }
+
+    public static Icon LoadTrayIcon()
+    {
+        var path = EnsureMainIconPath();
+        // 按当前 DPI 下的真实托盘小图标尺寸（如 100%=16, 125%=20, 150%=24, 200%=32）
+        // 从 ICO 内最高分辨率帧高质量双三次下采样，避免 16x16 强行放大发虚
+        var size = SystemInformation.SmallIconSize;
         try
         {
-            using var icon = new Icon(path, 32, 32);
-            return (Icon)icon.Clone();
+            return LoadCrispIconFromIco(path, size);
+        }
+        catch
+        {
+            try
+            {
+                var assoc = Icon.ExtractAssociatedIcon(AppPaths.ExecutablePath);
+                if (assoc is not null) return assoc;
+            }
+            catch
+            {
+                // 忽略回退异常
+            }
+            return (Icon)SystemIcons.Application.Clone();
+        }
+    }
+
+    /// <summary>
+    /// 从多帧 .ico 中提取分辨率最高的一帧（优先内嵌 PNG 256x256），
+    /// 使用高质量双三次插值缩放到目标 DPI 像素尺寸并转为 32 位 ARGB HICON。
+    /// </summary>
+    private static Icon LoadCrispIconFromIco(string icoPath, Size targetSize)
+    {
+        var w = Math.Max(16, targetSize.Width);
+        var h = Math.Max(16, targetSize.Height);
+        try
+        {
+            using var hiRes = ExtractBestBitmapFromIco(icoPath);
+            if (hiRes is not null)
+            {
+                using var scaled = new Bitmap(w, h, PixelFormat.Format32bppArgb);
+                using (var g = Graphics.FromImage(scaled))
+                {
+                    g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                    g.SmoothingMode = SmoothingMode.HighQuality;
+                    g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                    g.CompositingQuality = CompositingQuality.HighQuality;
+                    g.Clear(Color.Transparent);
+                    g.DrawImage(hiRes, new Rectangle(0, 0, w, h));
+                }
+                var hIcon = scaled.GetHicon();
+                try
+                {
+                    using var temp = Icon.FromHandle(hIcon);
+                    return (Icon)temp.Clone();
+                }
+                finally
+                {
+                    DestroyIcon(hIcon);
+                }
+            }
+
+            using var fallback = new Icon(icoPath, w, h);
+            return (Icon)fallback.Clone();
         }
         catch
         {
             return (Icon)SystemIcons.Application.Clone();
         }
+    }
+
+    private static Bitmap? ExtractBestBitmapFromIco(string icoPath)
+    {
+        var bytes = File.ReadAllBytes(icoPath);
+        if (bytes.Length < 22) return null;
+        var count = BitConverter.ToUInt16(bytes, 4);
+        if (count == 0 || bytes.Length < 6 + count * 16) return null;
+
+        int bestWidth = 0;
+        int bestOffset = -1;
+        int bestSize = 0;
+        for (var i = 0; i < count; i++)
+        {
+            var entryOff = 6 + i * 16;
+            int ew = bytes[entryOff] == 0 ? 256 : bytes[entryOff];
+            int dataSize = BitConverter.ToInt32(bytes, entryOff + 8);
+            int dataOffset = BitConverter.ToInt32(bytes, entryOff + 12);
+            if (dataOffset < 0 || dataSize <= 0 || dataOffset + dataSize > bytes.Length) continue;
+            // 优先选择最大尺寸的 PNG 帧（256x256 PNG 下采样最锐利）
+            var isPng = dataSize >= 8 &&
+                        bytes[dataOffset] == 0x89 && bytes[dataOffset + 1] == 0x50 &&
+                        bytes[dataOffset + 2] == 0x4E && bytes[dataOffset + 3] == 0x47;
+            if (isPng && ew >= bestWidth)
+            {
+                bestWidth = ew;
+                bestOffset = dataOffset;
+                bestSize = dataSize;
+            }
+        }
+
+        if (bestOffset >= 0)
+        {
+            using var ms = new MemoryStream(bytes, bestOffset, bestSize);
+            using var img = Image.FromStream(ms);
+            return new Bitmap(img);
+        }
+
+        using var icon = new Icon(icoPath, 256, 256);
+        return icon.ToBitmap();
     }
 
     public static Bitmap LoadToolBitmap(string toolName, string? configuredIconName, int size = 24)
