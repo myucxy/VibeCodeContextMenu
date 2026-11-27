@@ -1,0 +1,78 @@
+name: CI Build Check
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'windows/**'
+      - 'macos/**'
+      - 'ico/**'
+      - 'tools.json'
+      - 'VibeCode.ps1'
+      - 'Pack-VibeCode.ps1'
+      - '.github/workflows/**'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'windows/**'
+      - 'macos/**'
+      - 'ico/**'
+      - 'tools.json'
+      - 'VibeCode.ps1'
+      - 'Pack-VibeCode.ps1'
+      - '.github/workflows/**'
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: Windows Build & Script Check
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Validate tools.json & PowerShell syntax
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $null = Get-Content -LiteralPath 'tools.json' -Raw -Encoding UTF8 | ConvertFrom-Json
+          Write-Host '[OK] tools.json valid'
+
+          foreach ($script in @('VibeCode.ps1', 'Pack-VibeCode.ps1', 'windows\build.ps1', 'windows\pack.ps1')) {
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $script).Path, [ref]$null, [ref]$errors)
+            if ($errors.Count -gt 0) {
+              $errors | ForEach-Object { Write-Error "$script`:$($_.Extent.StartLineNumber): $($_.Message)" }
+              exit 1
+            }
+            Write-Host "[OK] $script syntax valid"
+          }
+
+      - name: Build Windows WinForms App (Release)
+        run: dotnet build windows/VibeCodeApp/VibeCodeApp.csproj -c Release --nologo
+
+  macos:
+    name: macOS Universal Build Check
+    runs-on: macos-14
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Build macOS Universal package
+        run: |
+          chmod +x macos/pack.sh macos/build.sh macos/launcher/launch-vibecode-tool.sh
+          bash macos/pack.sh --arch universal --output-dir dist
+          ls -lh dist
